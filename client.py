@@ -85,6 +85,9 @@ class MasterDnsVPNClient(PacketQueueMixin):
         # DNS transport and listener configuration
         # ---------------------------------------------------------
         self.resolvers: list = self.config.get("RESOLVER_DNS_SERVERS", [])
+        self.allowed_resolver_sources = {
+            str(r).strip().lower() for r in self.resolvers if str(r).strip()
+        }
         self.domains: list = self.config.get("DOMAINS", [])
         self.domains_lower: tuple = tuple(
             sorted((d.lower() for d in self.domains), key=len, reverse=True)
@@ -326,30 +329,50 @@ class MasterDnsVPNClient(PacketQueueMixin):
         except Exception:
             pass
 
+    def _match_allowed_domain_suffix(self, qname: str) -> Optional[str]:
+        """Return the matched allowed domain suffix for qname, if any."""
+        if not qname:
+            return None
+
+        name = qname.lower()
+        for domain_suffix in self.domains_lower:
+            if name.endswith(domain_suffix):
+                return domain_suffix
+        return None
+
     async def _process_received_packet(
         self, response_bytes: bytes, addr=None
     ) -> Tuple[Optional[dict], bytes]:
-        """Parse raw DNS response, extract VPN header, and return packet type."""
+        """Parse DNS response, validate source/domain once, then extract VPN payload."""
         if not response_bytes:
             return None, b""
 
         parsed = self.dns_parser.parse_dns_packet(response_bytes)
-        if addr and parsed and parsed.get("questions"):
-            try:
-                qname = parsed["questions"][0].get("qName", "").lower()
-                if qname.endswith(self.domains_lower):
-                    for d in self.domains_lower:
-                        if qname.endswith(d):
-                            server_key = f"{addr[0]}:{d}"
-                            sent_time = self.server_rtt_tracker.get(server_key, 0.0)
-                            calc_rtt = (
-                                time.monotonic() - sent_time if sent_time > 0.0 else 0.0
-                            )
+        if not parsed or not parsed.get("questions"):
+            return None, b""
 
-                            self.balancer.report_success(server_key, rtt=calc_rtt)
-                            break
-            except Exception:
-                pass
+        try:
+            qname = parsed["questions"][0].get("qName", "")
+            matched_domain = self._match_allowed_domain_suffix(qname)
+            if not matched_domain:
+                return None, b""
+
+            if addr:
+                source_ip = str(addr[0]).strip().lower()
+                if (
+                    self.allowed_resolver_sources
+                    and source_ip not in self.allowed_resolver_sources
+                ):
+                    return None, b""
+
+                server_key = f"{source_ip}:{matched_domain}"
+                sent_time = self.server_rtt_tracker.pop(server_key, 0.0)
+                if sent_time > 0.0:
+                    self.balancer.report_success(
+                        server_key, rtt=(time.monotonic() - sent_time)
+                    )
+        except Exception:
+            return None, b""
 
         return self.dns_parser.extract_vpn_response(
             parsed, is_encoded=self.base_encode_responses
