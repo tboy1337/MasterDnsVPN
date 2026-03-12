@@ -21,7 +21,7 @@ class DnsPacketParser:
 
     # Header extension rules:
     # - _PT_STREAM_EXT: packet carries stream_id
-    # - _PT_SEQ_EXT: packet carries sequence_num
+    # - _PT_SEQ_EXT: packet carries sequence_num (ARQ/control unification)
     # - _PT_FRAG_EXT: packet carries fragment_id
 
     _PT_STREAM_EXT = frozenset(
@@ -76,7 +76,9 @@ class DnsPacketParser:
 
     _PT_SEQ_EXT = frozenset(
         {
-            # Stream lifecycle and data (except SYN/SYN_ACK)
+            # Stream lifecycle and data
+            Packet_Type.STREAM_SYN,
+            Packet_Type.STREAM_SYN_ACK,
             Packet_Type.STREAM_DATA,
             Packet_Type.STREAM_DATA_ACK,
             Packet_Type.STREAM_RESEND,
@@ -97,6 +99,7 @@ class DnsPacketParser:
             Packet_Type.MTU_DOWN_RES,
             # SOCKS handshake/data
             Packet_Type.SOCKS5_SYN,
+            Packet_Type.SOCKS5_SYN_ACK,
             # SOCKS result/error packets
             Packet_Type.SOCKS5_CONNECT_FAIL,
             Packet_Type.SOCKS5_CONNECT_FAIL_ACK,
@@ -1379,15 +1382,15 @@ class DnsPacketParser:
     #   [0]  1 byte  (uint8)  : Session ID
     #   [1]  1 byte  (uint8)  : Packet Type
     #
-    # Extended Headers for STREAM_SYN, STREAM_SYN_ACK, STREAM_FIN, STREAM_DATA, STREAM_DATA_ACK, STREAM_RESEND, MTU_UP_REQ, MTU_DOWN_RES
-    #   [2]  2 bytes (uint16) : Stream ID (for STREAM_DATA packets)
+    # Extended headers for packet types in _PT_STREAM_EXT:
+    #   [2]  2 bytes (uint16) : Stream ID
     #
-    # Extended Headers for STREAM_DATA_ACK, STREAM_DATA, STREAM_RESEND, MTU_UP_REQ, MTU_DOWN_RES
-    #   [3]  2 bytes (uint16) : Sequence Number (for STREAM_DATA packets)
+    # Extended headers for packet types in _PT_SEQ_EXT:
+    #   [3]  2 bytes (uint16) : Sequence Number
     #
-    # Extended Headers for STREAM_DATA, STREAM_RESEND, MTU_UP_REQ, MTU_DOWN_RES
-    #   [4]  1 byte  (uint8)  : Fragment ID (for STREAM_DATA packets)
-    # Extended Header for STREAM_DATA or MTU_UP_REQ or MTU_DOWN_RES, If sequence number = 0 and fragment ID = 0
+    # Extended headers for packet types in _PT_FRAG_EXT:
+    #   [4]  1 byte  (uint8)  : Fragment ID
+    # Extended header for first fragment only (commonly when sequence=0 and frag=0):
     #   [5]  1 byte  (uint8)  : Total Fragments (for first packet of a stream)
     #   [6]  2 bytes (uint16) : Total Data Length (for first packet of a stream)
     #
@@ -1411,9 +1414,9 @@ class DnsPacketParser:
             session_id (int): VPN session identifier (0-255).
             packet_type (int): Type of VPN packet (0-255).
             base36_encode (bool): Whether to base36 encode the header,
-            stream_id (int): Stream ID for STREAM_DATA packets (0-65535).
-            sequence_num (int): Sequence number for STREAM_DATA packets (0-65535).
-            fragment_id (int): Fragment ID for STREAM_DATA packets (0-255).
+            stream_id (int): Stream ID for packets in _PT_STREAM_EXT (0-65535).
+            sequence_num (int): Sequence number for packets in _PT_SEQ_EXT (0-65535).
+            fragment_id (int): Fragment ID for packets in _PT_FRAG_EXT (0-255).
             total_fragments (int): Total fragments for the stream (0-255).
             total_data_length (int): Total data length for the stream (0-65535).
             encrypt_data (bool): Whether to encrypt the header.
