@@ -19,47 +19,118 @@ class DnsPacketParser:
     Handles DNS packet parsing, construction, and custom VPN header encoding.
     """
 
+    # Header extension rules:
+    # - _PT_STREAM_EXT: packet carries stream_id
+    # - _PT_SEQ_EXT: packet carries sequence_num
+    # - _PT_FRAG_EXT: packet carries fragment_id
+
     _PT_STREAM_EXT = frozenset(
         {
+            # Stream lifecycle and data
             Packet_Type.STREAM_SYN,
             Packet_Type.STREAM_SYN_ACK,
+            Packet_Type.STREAM_DATA,
+            Packet_Type.STREAM_DATA_ACK,
+            Packet_Type.STREAM_RESEND,
+            # Stream closure/reset
             Packet_Type.STREAM_FIN,
             Packet_Type.STREAM_FIN_ACK,
             Packet_Type.STREAM_RST,
             Packet_Type.STREAM_RST_ACK,
-            Packet_Type.STREAM_DATA,
-            Packet_Type.STREAM_DATA_ACK,
-            Packet_Type.STREAM_RESEND,
+            # TCP-like stream control
+            Packet_Type.STREAM_KEEPALIVE,
+            Packet_Type.STREAM_KEEPALIVE_ACK,
+            Packet_Type.STREAM_WINDOW_UPDATE,
+            Packet_Type.STREAM_WINDOW_UPDATE_ACK,
+            Packet_Type.STREAM_PROBE,
+            Packet_Type.STREAM_PROBE_ACK,
+            # MTU test packets that are stream-bound in parser format
             Packet_Type.MTU_UP_REQ,
             Packet_Type.MTU_DOWN_RES,
+            # SOCKS handshake
             Packet_Type.SOCKS5_SYN,
             Packet_Type.SOCKS5_SYN_ACK,
-        }
-    )
-    _PT_SEQ_EXT = frozenset(
-        {
-            Packet_Type.STREAM_DATA_ACK,
-            Packet_Type.STREAM_DATA,
-            Packet_Type.STREAM_RESEND,
-            Packet_Type.STREAM_FIN,
-            Packet_Type.STREAM_FIN_ACK,
-            Packet_Type.STREAM_RST,
-            Packet_Type.STREAM_RST_ACK,
-            Packet_Type.MTU_UP_REQ,
-            Packet_Type.MTU_DOWN_RES,
-            Packet_Type.SOCKS5_SYN,
-        }
-    )
-    _PT_FRAG_EXT = frozenset(
-        {
-            Packet_Type.STREAM_DATA,
-            Packet_Type.STREAM_RESEND,
-            Packet_Type.MTU_UP_REQ,
-            Packet_Type.MTU_DOWN_RES,
-            Packet_Type.SOCKS5_SYN,
+            # SOCKS result/error packets
+            Packet_Type.SOCKS5_CONNECT_FAIL,
+            Packet_Type.SOCKS5_CONNECT_FAIL_ACK,
+            Packet_Type.SOCKS5_RULESET_DENIED,
+            Packet_Type.SOCKS5_RULESET_DENIED_ACK,
+            Packet_Type.SOCKS5_NETWORK_UNREACHABLE,
+            Packet_Type.SOCKS5_NETWORK_UNREACHABLE_ACK,
+            Packet_Type.SOCKS5_HOST_UNREACHABLE,
+            Packet_Type.SOCKS5_HOST_UNREACHABLE_ACK,
+            Packet_Type.SOCKS5_CONNECTION_REFUSED,
+            Packet_Type.SOCKS5_CONNECTION_REFUSED_ACK,
+            Packet_Type.SOCKS5_TTL_EXPIRED,
+            Packet_Type.SOCKS5_TTL_EXPIRED_ACK,
+            Packet_Type.SOCKS5_COMMAND_UNSUPPORTED,
+            Packet_Type.SOCKS5_COMMAND_UNSUPPORTED_ACK,
+            Packet_Type.SOCKS5_ADDRESS_TYPE_UNSUPPORTED,
+            Packet_Type.SOCKS5_ADDRESS_TYPE_UNSUPPORTED_ACK,
+            Packet_Type.SOCKS5_AUTH_FAILED,
+            Packet_Type.SOCKS5_AUTH_FAILED_ACK,
+            Packet_Type.SOCKS5_UPSTREAM_UNAVAILABLE,
+            Packet_Type.SOCKS5_UPSTREAM_UNAVAILABLE_ACK,
         }
     )
 
+    _PT_SEQ_EXT = frozenset(
+        {
+            # Stream lifecycle and data (except SYN/SYN_ACK)
+            Packet_Type.STREAM_DATA,
+            Packet_Type.STREAM_DATA_ACK,
+            Packet_Type.STREAM_RESEND,
+            # Stream closure/reset
+            Packet_Type.STREAM_FIN,
+            Packet_Type.STREAM_FIN_ACK,
+            Packet_Type.STREAM_RST,
+            Packet_Type.STREAM_RST_ACK,
+            # TCP-like stream control
+            Packet_Type.STREAM_KEEPALIVE,
+            Packet_Type.STREAM_KEEPALIVE_ACK,
+            Packet_Type.STREAM_WINDOW_UPDATE,
+            Packet_Type.STREAM_WINDOW_UPDATE_ACK,
+            Packet_Type.STREAM_PROBE,
+            Packet_Type.STREAM_PROBE_ACK,
+            # MTU test packets that currently use seq in parser
+            Packet_Type.MTU_UP_REQ,
+            Packet_Type.MTU_DOWN_RES,
+            # SOCKS handshake/data
+            Packet_Type.SOCKS5_SYN,
+            # SOCKS result/error packets
+            Packet_Type.SOCKS5_CONNECT_FAIL,
+            Packet_Type.SOCKS5_CONNECT_FAIL_ACK,
+            Packet_Type.SOCKS5_RULESET_DENIED,
+            Packet_Type.SOCKS5_RULESET_DENIED_ACK,
+            Packet_Type.SOCKS5_NETWORK_UNREACHABLE,
+            Packet_Type.SOCKS5_NETWORK_UNREACHABLE_ACK,
+            Packet_Type.SOCKS5_HOST_UNREACHABLE,
+            Packet_Type.SOCKS5_HOST_UNREACHABLE_ACK,
+            Packet_Type.SOCKS5_CONNECTION_REFUSED,
+            Packet_Type.SOCKS5_CONNECTION_REFUSED_ACK,
+            Packet_Type.SOCKS5_TTL_EXPIRED,
+            Packet_Type.SOCKS5_TTL_EXPIRED_ACK,
+            Packet_Type.SOCKS5_COMMAND_UNSUPPORTED,
+            Packet_Type.SOCKS5_COMMAND_UNSUPPORTED_ACK,
+            Packet_Type.SOCKS5_ADDRESS_TYPE_UNSUPPORTED,
+            Packet_Type.SOCKS5_ADDRESS_TYPE_UNSUPPORTED_ACK,
+            Packet_Type.SOCKS5_AUTH_FAILED,
+            Packet_Type.SOCKS5_AUTH_FAILED_ACK,
+            Packet_Type.SOCKS5_UPSTREAM_UNAVAILABLE,
+            Packet_Type.SOCKS5_UPSTREAM_UNAVAILABLE_ACK,
+        }
+    )
+
+    _PT_FRAG_EXT = frozenset(
+        {
+            # Data-bearing / chunked payloads only
+            Packet_Type.STREAM_DATA,
+            Packet_Type.STREAM_RESEND,
+            Packet_Type.MTU_UP_REQ,
+            Packet_Type.MTU_DOWN_RES,
+            Packet_Type.SOCKS5_SYN,
+        }
+    )
     _VALID_PACKET_TYPES = frozenset(
         v for k, v in Packet_Type.__dict__.items() if not k.startswith("__")
     )

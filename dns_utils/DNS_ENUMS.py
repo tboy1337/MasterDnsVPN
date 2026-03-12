@@ -10,6 +10,7 @@
 
 
 class Packet_Type:
+    # Session / MTU negotiation
     MTU_UP_REQ = 0x01  # Client tests Upload MTU
     MTU_UP_RES = 0x02  # Server confirms Upload MTU
     MTU_DOWN_REQ = 0x03  # Client requests Download MTU test
@@ -18,31 +19,40 @@ class Packet_Type:
     SESSION_ACCEPT = 0x06  # Server accepts session and Conv ID
     SET_MTU_REQ = 0x07  # Client sends SET MTU to server
     SET_MTU_RES = 0x08  # Server confirms MTU update
+
+    # Session liveness
     PING = 0x09  # Client ping for latency check
     PONG = 0x0A  # Server pong response
+
+    # Stream lifecycle and data
     STREAM_SYN = 0x0B  # Client initiates TCP connection (SYN)
     STREAM_SYN_ACK = 0x0C  # Server acknowledges TCP connection (SYN-ACK)
-    STREAM_FIN = 0x0D  # Client finishes TCP connection (FIN)
-    STREAM_DATA = 0x0E  # Client/Server sends TCP data packet
-    STREAM_DATA_ACK = 0x0F  # Server/Client acknowledges TCP data packet fully received
-    STREAM_RESEND = 0x10  # Client/Server requests resend of lost packet
+    STREAM_DATA = 0x0D  # Client/Server sends TCP data packet
+    STREAM_DATA_ACK = 0x0E  # Server/Client acknowledges TCP data packet fully received
+    STREAM_RESEND = 0x0F  # Client/Server requests resend of lost packet
     PACKED_CONTROL_BLOCKS = (
-        0x11  # Client/Server sends multiple control blocks in one DNS response
+        0x10  # Client/Server sends multiple control blocks in one DNS response
     )
-    SOCKS5_SYN = 0x12  # Client initiates SOCKS5 handshake
-    SOCKS5_SYN_ACK = 0x13  # Server acknowledges SOCKS5 handshake
-    STREAM_FIN_ACK = 0x14  # ACK for STREAM_FIN
-    STREAM_RST = 0x15  # Abort/reset stream immediately
-    STREAM_RST_ACK = 0x16  # ACK for STREAM_RST
-    # Recommended for current architecture (TCP-like behavior over DNS).
-    STREAM_KEEPALIVE = 0x17  # Stream-level keepalive probe (TCP-like keepalive)
-    STREAM_KEEPALIVE_ACK = 0x18  # ACK for keepalive probe
-    STREAM_WINDOW_UPDATE = 0x19  # Advertise/refresh receiver window state
-    STREAM_WINDOW_UPDATE_ACK = 0x1A  # ACK for window update
-    STREAM_PROBE = 0x1B  # Probe peer state when stream is stalled (zero-window style)
-    STREAM_PROBE_ACK = 0x1C  # ACK for stream probe
 
-    # SOCKS5 result/error packet types (mirrors SOCKS5 REP semantics).
+    # Stream closure/reset
+    STREAM_FIN = 0x11  # Client finishes TCP connection (FIN)
+    STREAM_FIN_ACK = 0x12  # ACK for STREAM_FIN
+    STREAM_RST = 0x13  # Abort/reset stream immediately
+    STREAM_RST_ACK = 0x14  # ACK for STREAM_RST
+
+    # TCP-like stream control
+    STREAM_KEEPALIVE = 0x15  # Stream-level keepalive probe (TCP-like keepalive)
+    STREAM_KEEPALIVE_ACK = 0x16  # ACK for keepalive probe
+    STREAM_WINDOW_UPDATE = 0x17  # Advertise/refresh receiver window state
+    STREAM_WINDOW_UPDATE_ACK = 0x18  # ACK for window update
+    STREAM_PROBE = 0x19  # Probe peer state when stream is stalled (zero-window style)
+    STREAM_PROBE_ACK = 0x1A  # ACK for stream probe
+
+    # SOCKS handshake
+    SOCKS5_SYN = 0x1B  # Client initiates SOCKS5 handshake
+    SOCKS5_SYN_ACK = 0x1C  # Server acknowledges SOCKS5 handshake
+
+    # SOCKS5 result/error packet types (mirrors SOCKS5 REP semantics)
     SOCKS5_CONNECT_FAIL = 0x1D  # General SOCKS server failure
     SOCKS5_CONNECT_FAIL_ACK = 0x1E  # ACK for SOCKS5_CONNECT_FAIL
     SOCKS5_RULESET_DENIED = 0x1F  # Connection not allowed by ruleset
@@ -65,6 +75,8 @@ class Packet_Type:
     SOCKS5_AUTH_FAILED_ACK = 0x2E  # ACK for SOCKS5_AUTH_FAILED
     SOCKS5_UPSTREAM_UNAVAILABLE = 0x2F  # Upstream SOCKS is unavailable/unresponsive
     SOCKS5_UPSTREAM_UNAVAILABLE_ACK = 0x30  # ACK for SOCKS5_UPSTREAM_UNAVAILABLE
+
+    # System/control
     ERROR_DROP = 0xFF  # Invalid/Drop signal
 
 
