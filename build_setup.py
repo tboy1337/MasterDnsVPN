@@ -9,6 +9,7 @@ extensions = [
 ]
 
 setup(
+    python_requires=">=3.10",
     ext_modules=cythonize(
         extensions,
         compiler_directives={"language_level": "3"},
