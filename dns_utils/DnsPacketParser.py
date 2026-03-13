@@ -8,7 +8,7 @@ import math
 import os
 import random
 import struct
-from typing import Any, Optional
+from typing import Any
 
 from dns_utils.DNS_ENUMS import DNS_QClass, DNS_Record_Type, Packet_Type
 
@@ -162,7 +162,7 @@ class DnsPacketParser:
 
     def __init__(
         self,
-        logger: Optional[Any] = None,
+        logger: Any | None = None,
         encryption_key: str = "",
         encryption_method: int = 1,
     ):

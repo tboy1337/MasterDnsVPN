@@ -15,7 +15,7 @@ import struct
 import sys
 import time
 from collections import deque
-from typing import Any, Optional
+from typing import Any
 
 from dns_utils import ARQ, DnsPacketParser
 from dns_utils.config_loader import get_config_path, load_config
@@ -57,8 +57,8 @@ class MasterDnsVPNServer(PacketQueueMixin):
         # ---------------------------------------------------------
         # Runtime primitives
         # ---------------------------------------------------------
-        self.udp_sock: Optional[socket.socket] = None
-        self.loop: Optional[asyncio.AbstractEventLoop] = None
+        self.udp_sock: socket.socket | None = None
+        self.loop: asyncio.AbstractEventLoop | None = None
         self.should_stop = asyncio.Event()
 
         # ---------------------------------------------------------
@@ -292,7 +292,7 @@ class MasterDnsVPNServer(PacketQueueMixin):
         client_token: bytes = b"",
         client_upload_compression_type: int = 0,
         client_download_compression_type: int = 0,
-    ) -> Optional[int]:
+    ) -> int | None:
         try:
             if not self.free_session_ids:
                 self.logger.error(f"All {self._max_sessions} session slots are full!")
@@ -422,7 +422,7 @@ class MasterDnsVPNServer(PacketQueueMixin):
             pass
 
     def _extract_packet_payload(
-        self, labels: str, extracted_header: Optional[dict]
+        self, labels: str, extracted_header: dict | None
     ) -> bytes:
         """Extract packet payload and apply optional decompression based on header flag."""
         payload = self.dns_parser.extract_vpn_data_from_labels(labels)
@@ -477,7 +477,7 @@ class MasterDnsVPNServer(PacketQueueMixin):
         parsed_packet=None,
         session_id=None,
         extracted_header=None,
-    ) -> Optional[bytes]:
+    ) -> bytes | None:
         """Handle NEW_SESSION VPN packet."""
         client_payload = self._extract_packet_payload(labels, extracted_header)
         if not client_payload or len(client_payload) < 17:
@@ -1095,8 +1095,8 @@ class MasterDnsVPNServer(PacketQueueMixin):
         data: bytes,
         labels: str,
         request_domain: str,
-        extracted_header: Optional[dict] = None,
-    ) -> Optional[bytes]:
+        extracted_header: dict | None = None,
+    ) -> bytes | None:
         if packet_type == Packet_Type.SESSION_INIT:
             return await self._handle_session_init(
                 request_domain=request_domain,
@@ -1134,7 +1134,7 @@ class MasterDnsVPNServer(PacketQueueMixin):
         session_id: int,
         request_domain: str,
         question_packet: bytes,
-        closed_info: Optional[dict],
+        closed_info: dict | None,
     ) -> bytes:
         is_base = (
             closed_info["base_encode"] if closed_info else random.choice([True, False])
@@ -1158,7 +1158,7 @@ class MasterDnsVPNServer(PacketQueueMixin):
         addr=None,
         request_domain: str = "",
         extracted_header: dict = None,
-    ) -> Optional[bytes]:
+    ) -> bytes | None:
 
         pre_session_response = await self._handle_pre_session_packet(
             packet_type=packet_type,
@@ -1629,7 +1629,7 @@ class MasterDnsVPNServer(PacketQueueMixin):
         parsed_packet=None,
         session_id=None,
         extracted_header=None,
-    ) -> Optional[bytes]:
+    ) -> bytes | None:
         """Handle SET_MTU_REQ VPN packet and save it to the session."""
         session = self.sessions.get(session_id)
         if not session:
@@ -1689,7 +1689,7 @@ class MasterDnsVPNServer(PacketQueueMixin):
         parsed_packet=None,
         session_id=None,
         extracted_header=None,
-    ) -> Optional[bytes]:
+    ) -> bytes | None:
         """Handle MTU_DOWN_REQ (download MTU test) VPN packet."""
 
         download_size_bytes = self._extract_packet_payload(labels, extracted_header)
@@ -1734,7 +1734,7 @@ class MasterDnsVPNServer(PacketQueueMixin):
         parsed_packet=None,
         session_id=None,
         extracted_header=None,
-    ) -> Optional[bytes]:
+    ) -> bytes | None:
         """Handle SERVER_UPLOAD_TEST VPN packet."""
         raw_label = labels.split(".")[0] if "." in labels else labels
         base_encode = raw_label.startswith("1")

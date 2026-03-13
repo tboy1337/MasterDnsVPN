@@ -1,4 +1,4 @@
-﻿# MasterDnsVPN Client
+# MasterDnsVPN Client
 # Author: MasterkinG32
 # Github: https://github.com/masterking32
 # Year: 2026
@@ -13,7 +13,6 @@ import socket
 import sys
 import time
 from collections import defaultdict, deque
-from typing import Optional, Tuple
 
 from dns_utils import ARQ, DNSBalancer, DnsPacketParser, PingManager, PrependReader
 from dns_utils.compression import (
@@ -48,7 +47,7 @@ class MasterDnsVPNClient(PacketQueueMixin):
         # ---------------------------------------------------------
         # Runtime and lifecycle primitives
         # ---------------------------------------------------------
-        self.loop: Optional[asyncio.AbstractEventLoop] = None
+        self.loop: asyncio.AbstractEventLoop | None = None
         self.should_stop: asyncio.Event = asyncio.Event()
         self.session_restart_event = None
         self.rx_tasks = set()
@@ -341,7 +340,7 @@ class MasterDnsVPNClient(PacketQueueMixin):
     def _format_mtu_log_line(
         self,
         template: str,
-        connection: Optional[dict] = None,
+        connection: dict | None = None,
         cause: str = "",
     ) -> str:
         if not template:
@@ -383,7 +382,7 @@ class MasterDnsVPNClient(PacketQueueMixin):
     def _append_mtu_log_line(
         self,
         template: str,
-        connection: Optional[dict] = None,
+        connection: dict | None = None,
         cause: str = "",
         output_path: str = "",
     ) -> None:
@@ -554,7 +553,7 @@ class MasterDnsVPNClient(PacketQueueMixin):
         port: int,
         timeout: float = 10,
         buffer_size: int = 0,
-    ) -> Optional[bytes]:
+    ) -> bytes | None:
         """Send a UDP packet and wait for the response."""
         buf_size = buffer_size or self.buffer_size
 
@@ -599,7 +598,7 @@ class MasterDnsVPNClient(PacketQueueMixin):
         except Exception:
             pass
 
-    def _match_allowed_domain_suffix(self, qname: str) -> Optional[str]:
+    def _match_allowed_domain_suffix(self, qname: str) -> str | None:
         """Return the matched allowed domain suffix for qname, if any."""
         if not qname:
             return None
@@ -645,7 +644,7 @@ class MasterDnsVPNClient(PacketQueueMixin):
 
     async def _process_received_packet(
         self, response_bytes: bytes, addr=None
-    ) -> Tuple[Optional[dict], bytes]:
+    ) -> tuple[dict | None, bytes]:
         """Parse DNS response, validate source/domain once, then extract VPN payload."""
         if not response_bytes:
             return None, b""
