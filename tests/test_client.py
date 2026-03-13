@@ -8,6 +8,10 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from client import MasterDnsVPNClient
+from dns_utils.compression import Compression_Type
+from dns_utils.DNS_ENUMS import Packet_Type
+
 # ---------------------------------------------------------------------------
 # Minimal valid config for testing
 # ---------------------------------------------------------------------------
@@ -47,7 +51,6 @@ def make_client(config: dict | None = None):
     with patch("client.load_config", return_value=cfg), \
          patch("client.os.path.isfile", return_value=True), \
          patch("client.getLogger", return_value=_MOCK_LOGGER):
-        from client import MasterDnsVPNClient
         return MasterDnsVPNClient()
 
 
@@ -88,7 +91,6 @@ class TestClientInit:
              patch("client.getLogger", return_value=_MOCK_LOGGER), \
              patch("builtins.input", return_value=""), \
              patch("sys.exit") as mock_exit:
-            from client import MasterDnsVPNClient
             try:
                 MasterDnsVPNClient()
             except Exception:
@@ -102,7 +104,6 @@ class TestClientInit:
              patch("client.getLogger", return_value=_MOCK_LOGGER), \
              patch("builtins.input", return_value=""), \
              patch("sys.exit") as mock_exit:
-            from client import MasterDnsVPNClient
             try:
                 MasterDnsVPNClient()
             except Exception:
@@ -116,7 +117,6 @@ class TestClientInit:
              patch("client.getLogger", return_value=_MOCK_LOGGER), \
              patch("builtins.input", return_value=""), \
              patch("sys.exit") as mock_exit:
-            from client import MasterDnsVPNClient
             try:
                 MasterDnsVPNClient()
             except Exception:
@@ -168,7 +168,6 @@ class TestMatchAllowedDomainSuffix:
 
 class TestApplySessionCompressionPolicy:
     def test_compression_disabled_when_mtu_too_small(self) -> None:
-        from dns_utils.compression import Compression_Type
         client = make_client()
         client.upload_compression_type = Compression_Type.ZLIB
         client.download_compression_type = Compression_Type.ZLIB
@@ -180,7 +179,6 @@ class TestApplySessionCompressionPolicy:
         assert client.download_compression_type == Compression_Type.OFF
 
     def test_compression_kept_when_mtu_large_enough(self) -> None:
-        from dns_utils.compression import Compression_Type
         client = make_client()
         client.upload_compression_type = Compression_Type.ZLIB
         client.download_compression_type = Compression_Type.ZLIB
@@ -220,7 +218,6 @@ class TestProcessReceivedPacket:
 
     @pytest.mark.asyncio
     async def test_valid_vpn_response_returns_result(self) -> None:
-        from dns_utils.DNS_ENUMS import Packet_Type
         client = make_client()
         domain = "vpn.example.com"
         client.session_id = 1
@@ -332,7 +329,6 @@ class TestClientDnsParser:
 
 class TestClientQueueOperations:
     def test_push_queue_item(self) -> None:
-        from dns_utils.DNS_ENUMS import Packet_Type
         client = make_client()
         item = (0, 1, Packet_Type.PING, 0, 0, b"")
         # Use client.__dict__ as owner (same as real client code uses self.__dict__)
@@ -341,7 +337,6 @@ class TestClientQueueOperations:
         assert client.__dict__.get("priority_counts", {}).get(0, 0) == 1
 
     def test_on_queue_pop_decrements_counter(self) -> None:
-        from dns_utils.DNS_ENUMS import Packet_Type
         client = make_client()
         item = (0, 1, Packet_Type.PING, 0, 0, b"")
         client._push_queue_item(client.main_queue, client.__dict__, item)

@@ -9,6 +9,10 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from dns_utils.compression import Compression_Type
+from dns_utils.DNS_ENUMS import Packet_Type
+from server import MasterDnsVPNServer, Socks5ConnectError
+
 # ---------------------------------------------------------------------------
 # Minimal valid config for testing
 # ---------------------------------------------------------------------------
@@ -45,7 +49,6 @@ def make_server(config: dict | None = None):
          patch("server.os.path.isfile", return_value=True), \
          patch("server.getLogger", return_value=_MOCK_LOGGER), \
          patch("server.get_encrypt_key", return_value="testkey1234567890abcdef0123456789"):
-        from server import MasterDnsVPNServer
         return MasterDnsVPNServer()
 
 
@@ -91,7 +94,6 @@ class TestServerInit:
              patch("server.get_encrypt_key", return_value="key"), \
              patch("builtins.input", return_value=""), \
              patch("sys.exit") as mock_exit:
-            from server import MasterDnsVPNServer
             try:
                 MasterDnsVPNServer()
             except Exception:
@@ -106,7 +108,6 @@ class TestServerInit:
              patch("server.get_encrypt_key", return_value="key"), \
              patch("builtins.input", return_value=""), \
              patch("sys.exit") as mock_exit:
-            from server import MasterDnsVPNServer
             try:
                 MasterDnsVPNServer()
             except Exception:
@@ -153,7 +154,6 @@ class TestSessionManagement:
 
     @pytest.mark.asyncio
     async def test_new_session_with_zlib_compression(self) -> None:
-        from dns_utils.compression import Compression_Type
         server = make_server()
         sid = await server.new_session(
             client_upload_compression_type=Compression_Type.ZLIB,
@@ -164,7 +164,6 @@ class TestSessionManagement:
 
     @pytest.mark.asyncio
     async def test_new_session_fallback_unavailable_compression(self) -> None:
-        from dns_utils.compression import Compression_Type
         server = make_server()
         with patch("server.is_compression_type_available", return_value=False):
             sid = await server.new_session(
@@ -210,8 +209,6 @@ class TestExtractPacketPayload:
         server = make_server()
         domain = "vpn.example.com"
         payload = b"test payload data"
-        from dns_utils.DNS_ENUMS import Packet_Type
-
         labels_list = server.dns_parser.generate_labels(
             domain=domain,
             session_id=1,
@@ -267,13 +264,11 @@ class TestBuildInvalidSessionErrorResponse:
 
 class TestSocks5ConnectError:
     def test_error_carries_rep_code(self) -> None:
-        from server import Socks5ConnectError
         err = Socks5ConnectError(5, "Connection refused")
         assert err.rep_code == 5
         assert "Connection refused" in str(err)
 
     def test_rep_code_type_coercion(self) -> None:
-        from server import Socks5ConnectError
         err = Socks5ConnectError("3", "Network unreachable")  # type: ignore[arg-type]
         assert err.rep_code == 3
 
@@ -301,8 +296,6 @@ class TestHandleSessionInit:
     async def test_creates_session_with_valid_payload(self) -> None:
         server = make_server()
         domain = "vpn.example.com"
-        from dns_utils.DNS_ENUMS import Packet_Type
-
         # Payload: 16 bytes token + 1 byte base flag + 1 byte up_comp + 1 byte down_comp
         token = b"\x01" * 16
         payload = token + b"\x00\x00\x00"  # 19 bytes minimum
@@ -331,7 +324,6 @@ class TestHandleVpnPacket:
     @pytest.mark.asyncio
     async def test_error_drop_for_unknown_session(self) -> None:
         server = make_server()
-        from dns_utils.DNS_ENUMS import Packet_Type
         domain = "vpn.example.com"
         question = server.dns_parser.simple_question_packet(f"a.{domain}", 16)
 
@@ -350,8 +342,6 @@ class TestHandleVpnPacket:
     @pytest.mark.asyncio
     async def test_session_init_with_no_data(self) -> None:
         server = make_server()
-        from dns_utils.DNS_ENUMS import Packet_Type
-
         result = await server.handle_vpn_packet(
             packet_type=Packet_Type.SESSION_INIT,
             session_id=0,
@@ -370,8 +360,6 @@ class TestHandlePreSessionPacket:
     @pytest.mark.asyncio
     async def test_session_init_type_handled(self) -> None:
         server = make_server()
-        from dns_utils.DNS_ENUMS import Packet_Type
-
         result = await server._handle_pre_session_packet(
             packet_type=Packet_Type.SESSION_INIT,
             session_id=0,
@@ -384,8 +372,6 @@ class TestHandlePreSessionPacket:
     @pytest.mark.asyncio
     async def test_mtu_up_req_handled(self) -> None:
         server = make_server()
-        from dns_utils.DNS_ENUMS import Packet_Type
-
         result = await server._handle_pre_session_packet(
             packet_type=Packet_Type.MTU_UP_REQ,
             session_id=0,
@@ -398,8 +384,6 @@ class TestHandlePreSessionPacket:
     @pytest.mark.asyncio
     async def test_mtu_down_req_handled(self) -> None:
         server = make_server()
-        from dns_utils.DNS_ENUMS import Packet_Type
-
         result = await server._handle_pre_session_packet(
             packet_type=Packet_Type.MTU_DOWN_REQ,
             session_id=0,
@@ -412,8 +396,6 @@ class TestHandlePreSessionPacket:
     @pytest.mark.asyncio
     async def test_unknown_type_returns_none(self) -> None:
         server = make_server()
-        from dns_utils.DNS_ENUMS import Packet_Type
-
         result = await server._handle_pre_session_packet(
             packet_type=Packet_Type.PING,  # Not a pre-session type
             session_id=0,
@@ -474,7 +456,6 @@ class TestServerMtu:
 
 class TestServerQueueOperations:
     def test_push_queue_item_to_session_queue(self) -> None:
-        from dns_utils.DNS_ENUMS import Packet_Type
         server = make_server()
         session = {
             "main_queue": [],
@@ -495,8 +476,6 @@ class TestHandleClosedStreamPacket:
     @pytest.mark.asyncio
     async def test_returns_false_for_unknown_session(self) -> None:
         server = make_server()
-        from dns_utils.DNS_ENUMS import Packet_Type
-
         result = await server._handle_closed_stream_packet(
             session_id=99,  # Non-existent session
             stream_id=1,
@@ -508,8 +487,6 @@ class TestHandleClosedStreamPacket:
     @pytest.mark.asyncio
     async def test_returns_false_for_stream_not_in_closed_streams(self) -> None:
         server = make_server()
-        from dns_utils.DNS_ENUMS import Packet_Type
-
         sid = await server.new_session()
         assert sid is not None
 
@@ -531,8 +508,6 @@ class TestHandleStreamSyn:
     @pytest.mark.asyncio
     async def test_stream_syn_no_session(self) -> None:
         server = make_server()
-        from dns_utils.DNS_ENUMS import Packet_Type
-
         result = await server._handle_stream_syn(
             session_id=99,
             stream_id=1,
@@ -543,8 +518,6 @@ class TestHandleStreamSyn:
     @pytest.mark.asyncio
     async def test_stream_syn_with_valid_session(self) -> None:
         server = make_server()
-        from dns_utils.DNS_ENUMS import Packet_Type
-
         # Create a session first
         sid = await server.new_session()
         assert sid is not None
@@ -588,13 +561,11 @@ class TestServerCryptoConfig:
 
 class TestServerPacketTypeResolution:
     def test_resolve_stream_data(self) -> None:
-        from dns_utils.DNS_ENUMS import Packet_Type
         server = make_server()
         result = server._resolve_arq_packet_type()
         assert result == Packet_Type.STREAM_DATA
 
     def test_resolve_stream_fin(self) -> None:
-        from dns_utils.DNS_ENUMS import Packet_Type
         server = make_server()
         result = server._resolve_arq_packet_type(is_fin=True)
         assert result == Packet_Type.STREAM_FIN

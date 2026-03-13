@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import heapq
 from unittest.mock import MagicMock
 
@@ -347,7 +348,6 @@ class TestPushAndPop:
         assert owner["priority_counts"][0] == 1
 
     def test_push_sets_event(self, mixin: ConcreteQueue) -> None:
-        import asyncio
         loop = asyncio.new_event_loop()
         try:
             event = loop.run_until_complete(asyncio.coroutine(lambda: asyncio.Event())())

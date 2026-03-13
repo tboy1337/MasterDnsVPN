@@ -189,7 +189,7 @@ class DnsPacketParser:
 
         if self.encryption_method in (3, 4, 5):
             try:
-                from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+                from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # pylint: disable=import-outside-toplevel
 
                 self._aesgcm = AESGCM(self.key)
             except ImportError:
@@ -198,8 +198,8 @@ class DnsPacketParser:
 
         elif self.encryption_method == 2:
             try:
-                from cryptography.hazmat.backends import default_backend
-                from cryptography.hazmat.primitives.ciphers import Cipher, algorithms
+                from cryptography.hazmat.backends import default_backend  # pylint: disable=import-outside-toplevel
+                from cryptography.hazmat.primitives.ciphers import Cipher, algorithms  # pylint: disable=import-outside-toplevel
 
                 self._Cipher = Cipher
                 self._default_backend = default_backend

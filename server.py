@@ -2305,7 +2305,7 @@ def main():
             pass
         else:
             try:
-                import uvloop
+                import uvloop  # pylint: disable=import-outside-toplevel
 
                 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
             except ImportError:
@@ -2348,7 +2348,7 @@ def main():
 
         if sys.platform == "win32":
             try:
-                from ctypes import wintypes
+                from ctypes import wintypes  # pylint: disable=import-outside-toplevel
 
                 HandlerRoutine = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.DWORD)
 

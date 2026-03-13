@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import sys
+import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -183,7 +185,6 @@ class TestAsyncRecvfrom:
         expected = (b"data", ("127.0.0.1", 53))
 
         with patch.object(loop, "sock_recvfrom", new=AsyncMock(return_value=expected)):
-            import sys
             if sys.version_info >= (3, 11):
                 result = await async_recvfrom(loop, mock_sock, 512)
                 assert result == expected
@@ -230,7 +231,6 @@ class TestAsyncRecvfrom:
     @pytest.mark.asyncio
     async def test_sock_recvfrom_attribute_error_fallback(self) -> None:
         """sock_recvfrom raises AttributeError on 3.11+ falls through to sync."""
-        import sys
         loop = asyncio.get_event_loop()
         mock_sock = MagicMock()
         mock_sock.recvfrom = MagicMock(return_value=(b"data", ("127.0.0.1", 53)))
@@ -243,7 +243,6 @@ class TestAsyncRecvfrom:
     @pytest.mark.asyncio
     async def test_sock_recvfrom_not_implemented_fallback(self) -> None:
         """sock_recvfrom raises NotImplementedError on 3.11+ falls through to sync."""
-        import sys
         loop = asyncio.get_event_loop()
         mock_sock = MagicMock()
         mock_sock.recvfrom = MagicMock(return_value=(b"hello", ("10.0.0.1", 5300)))
@@ -603,7 +602,6 @@ class TestHypothesisUtils:
     @given(st.text(alphabet=st.characters(blacklist_categories=("Cs",), blacklist_characters="\r"), min_size=0, max_size=512))
     @settings(max_examples=50)
     def test_save_load_roundtrip_property(self, content: str) -> None:
-        import tempfile
         with tempfile.TemporaryDirectory() as tmpdir:
             f = Path(tmpdir) / "prop_test.txt"
             save_text(str(f), content)
@@ -613,7 +611,6 @@ class TestHypothesisUtils:
     @given(st.binary(min_size=0, max_size=64).map(lambda b: b.hex()))
     @settings(max_examples=50)
     def test_save_load_hex_content_roundtrip(self, content: str) -> None:
-        import tempfile
         with tempfile.TemporaryDirectory() as tmpdir:
             f = Path(tmpdir) / "hex_test.txt"
             save_text(str(f), content)

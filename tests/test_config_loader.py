@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dns_utils.config_loader as cl
 import os
 import sys
 from pathlib import Path
@@ -122,7 +123,6 @@ username = "user"
 
     def test_using_tomllib_module_directly(self) -> None:
         """Verify that the tomllib module is used (either stdlib or tomli fallback)."""
-        import dns_utils.config_loader as cl
         assert hasattr(cl, "tomllib") or hasattr(cl, "tomli") or True
 
 
@@ -134,10 +134,10 @@ username = "user"
 def test_tomllib_stdlib_available() -> None:
     """Confirm tomllib is available (Python 3.11+) or tomli fallback."""
     try:
-        import tomllib
+        import tomllib  # pylint: disable=import-outside-toplevel
         assert tomllib is not None
     except ImportError:
-        import tomli  # type: ignore[import]
+        import tomli  # type: ignore[import]  # pylint: disable=import-outside-toplevel
         assert tomli is not None
 
 

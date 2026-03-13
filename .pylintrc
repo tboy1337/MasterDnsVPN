@@ -28,7 +28,6 @@ disable =
     invalid-name,
     not-callable,
     wrong-import-order,
-    import-outside-toplevel,
     protected-access,
     redefined-outer-name,
     attribute-defined-outside-init,

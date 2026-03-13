@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+import zlib
+
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
@@ -143,7 +146,6 @@ class TestCompressPayload:
         assert ct == Compression_Type.LZ4
 
     def test_incompressible_data_returns_off(self) -> None:
-        import os
         random_data = os.urandom(500)
         data, ct = compress_payload(random_data, Compression_Type.ZLIB)
         # Random data may or may not compress; either way the return must be valid
@@ -187,7 +189,6 @@ class TestTryDecompressPayload:
         assert ok is True
 
     def test_zlib_roundtrip(self) -> None:
-        import zlib
         original = b"test data " * 30
         comp_obj = zlib.compressobj(level=1, wbits=-15)
         compressed = comp_obj.compress(original) + comp_obj.flush()
@@ -202,7 +203,7 @@ class TestTryDecompressPayload:
 
     @pytest.mark.skipif(not ZSTD_AVAILABLE, reason="zstandard not installed")
     def test_zstd_roundtrip(self) -> None:
-        import zstandard as zstd
+        import zstandard as zstd  # pylint: disable=import-outside-toplevel
         original = b"zstd test payload " * 20
         compressor = zstd.ZstdCompressor(level=1)
         compressed = compressor.compress(original)
@@ -212,7 +213,7 @@ class TestTryDecompressPayload:
 
     @pytest.mark.skipif(not LZ4_AVAILABLE, reason="lz4 not installed")
     def test_lz4_roundtrip(self) -> None:
-        import lz4.block as lz4block
+        import lz4.block as lz4block  # pylint: disable=import-outside-toplevel
         original = b"lz4 test payload " * 20
         compressed = lz4block.compress(original, store_size=True)
         out, ok = try_decompress_payload(compressed, Compression_Type.LZ4)
@@ -238,7 +239,6 @@ class TestTryDecompressPayload:
 
 class TestDecompressPayload:
     def test_success_returns_decompressed(self) -> None:
-        import zlib
         original = b"decompress test " * 30
         comp_obj = zlib.compressobj(level=1, wbits=-15)
         compressed = comp_obj.compress(original) + comp_obj.flush()
