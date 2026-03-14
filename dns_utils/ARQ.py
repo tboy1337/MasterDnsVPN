@@ -383,32 +383,31 @@ class ARQ:
             pass
         except Exception as e:
             self.logger.debug(f"Stream {self.stream_id} IO loop error: {e}")
+        finally:
+            if self.closed:
+                pass
+            elif reset_required:
+                await self.abort(reason=error_reason or "Local reset/error")
+            elif self._fin_received:
+                # Do not drop outbound queue. Drain and then graceful close.
+                wait_deadline = time.monotonic() + self.fin_drain_timeout
+                while (
+                    self.snd_buf
+                    and time.monotonic() < wait_deadline
+                    and not self.closed
+                ):
+                    await asyncio.sleep(0.05)
 
-        # Post-loop cleanup (outside finally to avoid return-in-finally SyntaxWarning)
-        if self.closed:
-            pass
-        elif reset_required:
-            await self.abort(reason=error_reason or "Local reset/error")
-        elif self._fin_received:
-            # Do not drop outbound queue. Drain and then graceful close.
-            wait_deadline = time.monotonic() + self.fin_drain_timeout
-            while (
-                self.snd_buf
-                and time.monotonic() < wait_deadline
-                and not self.closed
-            ):
-                await asyncio.sleep(0.05)
-
-            if self.snd_buf and not self.closed:
-                await self.abort(
-                    reason="Remote FIN received but local send buffer did not drain"
-                )
-            elif not self.closed:
-                await self._initiate_graceful_close(
-                    reason="Remote FIN fully handled"
-                )
-        elif graceful_eof:
-            await self._initiate_graceful_close(reason=error_reason or "Local EOF")
+                if self.snd_buf and not self.closed:
+                    await self.abort(
+                        reason="Remote FIN received but local send buffer did not drain"
+                    )
+                elif not self.closed:
+                    await self._initiate_graceful_close(
+                        reason="Remote FIN fully handled"
+                    )
+            elif graceful_eof:
+                await self._initiate_graceful_close(reason=error_reason or "Local EOF")
 
     # Drain outstanding sends and then close with FIN.
     async def _initiate_graceful_close(self, reason="Graceful close"):
@@ -863,8 +862,11 @@ class ARQ:
             task.cancel()
         if tasks_to_cancel:
             try:
-                await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
-            except BaseException:
+                await asyncio.wait_for(
+                    asyncio.gather(*tasks_to_cancel, return_exceptions=True),
+                    timeout=0.2,
+                )
+            except Exception:
                 pass
 
         try:
@@ -876,9 +878,9 @@ class ARQ:
                 self.writer.close()
                 try:
                     await asyncio.wait_for(self.writer.wait_closed(), timeout=0.5)
-                except BaseException:
+                except Exception:
                     pass
-        except BaseException:
+        except Exception:
             pass
 
         self._clear_all_queues()
