@@ -860,12 +860,8 @@ class ARQ:
         ]
         for task in tasks_to_cancel:
             task.cancel()
-        if tasks_to_cancel:
             try:
-                await asyncio.wait_for(
-                    asyncio.gather(*tasks_to_cancel, return_exceptions=True),
-                    timeout=0.2,
-                )
+                await asyncio.wait_for(task, timeout=0.2)
             except Exception:
                 pass
 
