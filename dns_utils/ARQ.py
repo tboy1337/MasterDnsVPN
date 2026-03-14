@@ -388,7 +388,7 @@ class ARQ:
             error_reason = str(e)
         finally:
             if self.closed:
-                pass
+                pass  # already closed — cleanup was handled by whoever called close()
             elif reset_required:
                 await self.abort(reason=error_reason or "Local reset/error")
             elif self._fin_received:
