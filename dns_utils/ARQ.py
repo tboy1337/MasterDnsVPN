@@ -6,6 +6,7 @@
 import asyncio
 import socket
 import time
+import traceback
 from dataclasses import dataclass
 
 from dns_utils.DNS_ENUMS import Packet_Type, Stream_State
@@ -862,8 +863,17 @@ class ARQ:
             task.cancel()
             try:
                 await asyncio.wait_for(task, timeout=0.2)
-            except Exception:
-                pass
+            except asyncio.TimeoutError:
+                self.logger.debug(
+                    f"Stream {self.stream_id}: task {task.get_name()!r} "
+                    f"did not finish within 0.2 s after cancel during close()"
+                )
+            except BaseException as exc:
+                self.logger.debug(
+                    f"Stream {self.stream_id}: unexpected exception while awaiting "
+                    f"cancelled task {task.get_name()!r} during close():\n"
+                    f"{''.join(traceback.format_exception(type(exc), exc, exc.__traceback__))}"
+                )
 
         try:
             if (
