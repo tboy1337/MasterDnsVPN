@@ -34,8 +34,13 @@ type Decision struct {
 }
 
 type Matcher struct {
-	allowedDomains []string
+	allowedDomains []allowedDomain
 	minLabelLength int
+}
+
+type allowedDomain struct {
+	domain string
+	suffix string
 }
 
 func New(domains []string, minLabelLength int) *Matcher {
@@ -45,7 +50,7 @@ func New(domains []string, minLabelLength int) *Matcher {
 	}
 
 	return &Matcher{
-		allowedDomains: normalized,
+		allowedDomains: newAllowedDomains(normalized),
 		minLabelLength: minLabelLength,
 	}
 }
@@ -56,7 +61,9 @@ func (m *Matcher) Domains() []string {
 	}
 
 	domains := make([]string, len(m.allowedDomains))
-	copy(domains, m.allowedDomains)
+	for i := range m.allowedDomains {
+		domains[i] = m.allowedDomains[i].domain
+	}
 	return domains
 }
 
@@ -81,6 +88,7 @@ func (m *Matcher) Match(parsed dnsparser.LitePacket) Decision {
 			QuestionType: q0.Type,
 		}
 	}
+	labels = stripLabelDots(labels)
 
 	if q0.Type != enums.DNSRecordTypeTXT {
 		return Decision{
@@ -160,25 +168,54 @@ func normalizeDomains(domains []string) []string {
 	return normalized
 }
 
+func newAllowedDomains(domains []string) []allowedDomain {
+	if len(domains) == 0 {
+		return nil
+	}
+
+	allowed := make([]allowedDomain, len(domains))
+	for i, domain := range domains {
+		allowed[i] = allowedDomain{
+			domain: domain,
+			suffix: "." + domain,
+		}
+	}
+
+	return allowed
+}
+
 func normalizeDomain(domain string) string {
 	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(domain)), ".")
 }
 
-func findAllowedDomain(requestName string, allowedDomains []string) (baseDomain string, labels string, matched bool) {
+func findAllowedDomain(requestName string, allowedDomains []allowedDomain) (baseDomain string, labels string, matched bool) {
 	for _, domain := range allowedDomains {
-		if requestName == domain {
-			return domain, "", true
+		if requestName == domain.domain {
+			return domain.domain, "", true
 		}
 
-		if len(requestName) <= len(domain)+1 {
+		if len(requestName) <= len(domain.suffix) {
 			continue
 		}
 
-		suffix := "." + domain
-		if strings.HasSuffix(requestName, suffix) {
-			return domain, requestName[:len(requestName)-len(suffix)], true
+		if strings.HasSuffix(requestName, domain.suffix) {
+			return domain.domain, requestName[:len(requestName)-len(domain.suffix)], true
 		}
 	}
 
 	return "", "", false
+}
+
+func stripLabelDots(labels string) string {
+	if strings.IndexByte(labels, '.') == -1 {
+		return labels
+	}
+
+	buf := make([]byte, 0, len(labels))
+	for i := 0; i < len(labels); i++ {
+		if labels[i] != '.' {
+			buf = append(buf, labels[i])
+		}
+	}
+	return string(buf)
 }

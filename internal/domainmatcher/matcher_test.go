@@ -65,6 +65,18 @@ func TestMatcherReturnsProcessForTXTWithExtraLabels(t *testing.T) {
 	}
 }
 
+func TestMatcherPreservesMultipleLabels(t *testing.T) {
+	matcher := New([]string{"a.com"}, 3)
+
+	decision := matcher.Match(litePacketWithQuestion("aa.bb.a.com", enums.DNSRecordTypeTXT))
+	if decision.Action != ActionProcess {
+		t.Fatalf("unexpected action: got=%d want=%d", decision.Action, ActionProcess)
+	}
+	if decision.Labels != "aabb" {
+		t.Fatalf("unexpected labels: got=%q want=%q", decision.Labels, "aabb")
+	}
+}
+
 func TestMatcherRespectsBoundaryBeforeSuffix(t *testing.T) {
 	matcher := New([]string{"a.com"}, 3)
 
