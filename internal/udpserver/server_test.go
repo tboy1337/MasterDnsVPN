@@ -279,6 +279,91 @@ func TestHandlePacketNegotiatesUnsupportedCompressionToOff(t *testing.T) {
 	}
 }
 
+func TestHandlePacketDropsPostSessionPacketWithInvalidCookie(t *testing.T) {
+	codec, err := security.NewCodec(0, "")
+	if err != nil {
+		t.Fatalf("NewCodec returned error: %v", err)
+	}
+
+	srv := New(config.ServerConfig{
+		MaxPacketSize:     65535,
+		Domain:            []string{"a.com"},
+		MinVPNLabelLength: 3,
+	}, nil, codec)
+
+	verifyCode := []byte{0x44, 0x33, 0x22, 0x11}
+	initPayload := []byte{
+		1,
+		0x00,
+		0x00, 0x96,
+		0x00, 0xC8,
+		verifyCode[0], verifyCode[1], verifyCode[2], verifyCode[3],
+	}
+
+	initResponse := srv.handlePacket(buildTunnelQueryWithSessionID(t, codec, "a.com", 0, ENUMS.PacketSessionInit, initPayload))
+	packet, err := DnsParser.ExtractVPNResponse(initResponse, true)
+	if err != nil {
+		t.Fatalf("ExtractVPNResponse returned error: %v", err)
+	}
+
+	sessionID := packet.Payload[0]
+	wrongCookie := packet.Payload[1] + 1
+	postSessionQuery := buildTunnelQueryWithCookie(t, codec, "a.com", sessionID, wrongCookie, ENUMS.PacketPing, nil)
+	if response := srv.handlePacket(postSessionQuery); len(response) != 0 {
+		t.Fatal("post-session packet with invalid cookie must be dropped")
+	}
+}
+
+func TestHandlePacketAcceptsPostSessionPacketWithValidCookie(t *testing.T) {
+	codec, err := security.NewCodec(0, "")
+	if err != nil {
+		t.Fatalf("NewCodec returned error: %v", err)
+	}
+
+	srv := New(config.ServerConfig{
+		MaxPacketSize:     65535,
+		Domain:            []string{"a.com"},
+		MinVPNLabelLength: 3,
+	}, nil, codec)
+
+	verifyCode := []byte{0x10, 0x20, 0x30, 0x40}
+	initPayload := []byte{
+		1,
+		0x00,
+		0x00, 0x96,
+		0x00, 0xC8,
+		verifyCode[0], verifyCode[1], verifyCode[2], verifyCode[3],
+	}
+
+	initResponse := srv.handlePacket(buildTunnelQueryWithSessionID(t, codec, "a.com", 0, ENUMS.PacketSessionInit, initPayload))
+	packet, err := DnsParser.ExtractVPNResponse(initResponse, true)
+	if err != nil {
+		t.Fatalf("ExtractVPNResponse returned error: %v", err)
+	}
+
+	sessionID := packet.Payload[0]
+	sessionCookie := packet.Payload[1]
+	activeBefore, ok := srv.sessions.Active(sessionID)
+	if !ok {
+		t.Fatal("expected active session after session init")
+	}
+
+	time.Sleep(5 * time.Millisecond)
+	postSessionQuery := buildTunnelQueryWithCookie(t, codec, "a.com", sessionID, sessionCookie, ENUMS.PacketPing, nil)
+	response := srv.handlePacket(postSessionQuery)
+	if len(response) == 0 {
+		t.Fatal("post-session packet with valid cookie should reach normal handler path")
+	}
+
+	activeAfter, ok := srv.sessions.Active(sessionID)
+	if !ok {
+		t.Fatal("expected active session after validated packet")
+	}
+	if !activeAfter.LastActivityAt.After(activeBefore.LastActivityAt) {
+		t.Fatal("validated post-session packet should refresh session activity")
+	}
+}
+
 func TestSessionStoreExpiresReuseSignatureWithoutDroppingSession(t *testing.T) {
 	store := newSessionStore()
 	payload := []byte{1, 0x21, 0x00, 0x96, 0x00, 0xC8, 0x44, 0x33, 0x22, 0x11}
@@ -398,11 +483,16 @@ func buildTunnelQuery(t *testing.T, codec *security.Codec, name string, packetTy
 }
 
 func buildTunnelQueryWithSessionID(t *testing.T, codec *security.Codec, name string, sessionID uint8, packetType uint8, payload []byte) []byte {
+	return buildTunnelQueryWithCookie(t, codec, name, sessionID, 0, packetType, payload)
+}
+
+func buildTunnelQueryWithCookie(t *testing.T, codec *security.Codec, name string, sessionID uint8, sessionCookie uint8, packetType uint8, payload []byte) []byte {
 	t.Helper()
 
 	encoded, err := VPNProto.BuildEncoded(VPNProto.BuildOptions{
 		SessionID:      sessionID,
 		PacketType:     packetType,
+		SessionCookie:  sessionCookie,
 		StreamID:       1,
 		SequenceNum:    1,
 		TotalFragments: 1,

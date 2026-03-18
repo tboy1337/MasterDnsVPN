@@ -302,6 +302,12 @@ func (s *Server) handleTunnelCandidate(packet []byte, parsed DnsParser.LitePacke
 		}
 		return response
 	}
+	if !isPreSessionRequestType(vpnPacket.PacketType) {
+		if !s.sessions.ValidateCookie(vpnPacket.SessionID, vpnPacket.SessionCookie) {
+			return nil
+		}
+		s.sessions.Touch(vpnPacket.SessionID, time.Now())
+	}
 
 	switch vpnPacket.PacketType {
 	case ENUMS.PacketSessionInit:
@@ -316,6 +322,15 @@ func (s *Server) handleTunnelCandidate(packet []byte, parsed DnsParser.LitePacke
 			return nil
 		}
 		return response
+	}
+}
+
+func isPreSessionRequestType(packetType uint8) bool {
+	switch packetType {
+	case ENUMS.PacketSessionInit, ENUMS.PacketMTUUpReq, ENUMS.PacketMTUDownReq:
+		return true
+	default:
+		return false
 	}
 }
 

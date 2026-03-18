@@ -12,6 +12,8 @@ import (
 	"testing"
 
 	"masterdnsvpn-go/internal/config"
+	"masterdnsvpn-go/internal/enums"
+	"masterdnsvpn-go/internal/vpnproto"
 )
 
 func TestBuildConnectionMap(t *testing.T) {
@@ -135,5 +137,45 @@ func TestBuildSessionInitPayloadLayout(t *testing.T) {
 	}
 	if string(payload[6:10]) != string(verifyCode[:]) {
 		t.Fatalf("unexpected verify code bytes: got=%v want=%v", payload[6:10], verifyCode)
+	}
+}
+
+func TestValidateServerPacketAllowsPreSessionResponses(t *testing.T) {
+	c := New(config.ClientConfig{}, nil, nil)
+	if !c.validateServerPacket(vpnproto.Packet{PacketType: enums.PacketMTUUpRes}) {
+		t.Fatal("pre-session mtu-up response should be accepted")
+	}
+	if !c.validateServerPacket(vpnproto.Packet{PacketType: enums.PacketMTUDownRes}) {
+		t.Fatal("pre-session mtu-down response should be accepted")
+	}
+	if !c.validateServerPacket(vpnproto.Packet{PacketType: enums.PacketSessionAccept}) {
+		t.Fatal("pre-session session-accept should be accepted")
+	}
+}
+
+func TestValidateServerPacketRequiresMatchingSessionCookie(t *testing.T) {
+	c := New(config.ClientConfig{}, nil, nil)
+	c.sessionID = 7
+	c.sessionCookie = 55
+
+	valid := vpnproto.Packet{
+		SessionID:     7,
+		SessionCookie: 55,
+		PacketType:    enums.PacketPong,
+	}
+	if !c.validateServerPacket(valid) {
+		t.Fatal("matching session packet should be accepted")
+	}
+
+	wrongCookie := valid
+	wrongCookie.SessionCookie = 66
+	if c.validateServerPacket(wrongCookie) {
+		t.Fatal("packet with wrong session cookie should be rejected")
+	}
+
+	wrongSession := valid
+	wrongSession.SessionID = 8
+	if c.validateServerPacket(wrongSession) {
+		t.Fatal("packet with wrong session id should be rejected")
 	}
 }

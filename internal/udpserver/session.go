@@ -160,8 +160,11 @@ func (s *sessionStore) ExpectedCookie(sessionID uint8) (uint8, bool) {
 }
 
 func (s *sessionStore) ValidateCookie(sessionID uint8, cookie uint8) bool {
-	expected, ok := s.ExpectedCookie(sessionID)
-	return ok && expected == cookie
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	record := s.byID[sessionID]
+	return record != nil && record.Cookie == cookie
 }
 
 func (s *sessionStore) Close(sessionID uint8, now time.Time, retention time.Duration) bool {

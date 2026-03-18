@@ -260,6 +260,9 @@ func (c *Client) sendUploadMTUProbe(conn *Connection, probeTransport *mtuProbeTr
 	if err != nil {
 		return false, nil
 	}
+	if !c.validateServerPacket(packet) {
+		return false, nil
+	}
 	if packet.PacketType != ENUMS.PacketMTUUpRes {
 		return false, nil
 	}
@@ -307,6 +310,9 @@ func (c *Client) sendDownloadMTUProbe(conn *Connection, probeTransport *mtuProbe
 
 	packet, err := DnsParser.ExtractVPNResponse(response, payload[0] == mtuProbeBase64Reply)
 	if err != nil {
+		return false, nil
+	}
+	if !c.validateServerPacket(packet) {
 		return false, nil
 	}
 	if packet.PacketType != ENUMS.PacketMTUDownRes {

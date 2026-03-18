@@ -65,7 +65,7 @@ func (c *Client) InitializeSession(maxAttempts int) error {
 		}
 
 		packet, err := dnsparser.ExtractVPNResponse(response, responseBase64)
-		if err != nil || packet.PacketType != enums.PacketSessionAccept || len(packet.Payload) < sessionAcceptPayloadSize {
+		if err != nil || !c.validateServerPacket(packet) || packet.PacketType != enums.PacketSessionAccept || len(packet.Payload) < sessionAcceptPayloadSize {
 			c.SetConnectionValidity(conn.Key, false)
 			continue
 		}
