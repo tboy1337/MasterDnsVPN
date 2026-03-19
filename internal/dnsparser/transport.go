@@ -242,26 +242,17 @@ func buildTXTAnswerChunks(rawFrame []byte, baseEncode bool) ([][]byte, error) {
 	}
 
 	if len(rawFrame) <= maxChunk {
-		if !baseEncode {
-			return [][]byte{appendLengthPrefixedTXT(rawFrame)}, nil
-		}
-		return [][]byte{appendLengthPrefixedTXT(baseCodec.EncodeRawBase64(rawFrame))}, nil
+		return [][]byte{buildTXTAnswerChunk(rawFrame, baseEncode)}, nil
 	}
 
 	header, err := VpnProto.Parse(rawFrame)
 	if err != nil {
-		if !baseEncode {
-			return [][]byte{appendLengthPrefixedTXT(rawFrame)}, nil
-		}
-		return [][]byte{appendLengthPrefixedTXT(baseCodec.EncodeRawBase64(rawFrame))}, nil
+		return [][]byte{buildTXTAnswerChunk(rawFrame, baseEncode)}, nil
 	}
 
 	headerLen := header.HeaderLength
 	chunk0PrefixLen := 2
-	maxChunk0Data := maxChunk - chunk0PrefixLen - headerLen
-	if maxChunk0Data < 0 {
-		maxChunk0Data = 0
-	}
+	maxChunk0Data := max(maxChunk-chunk0PrefixLen-headerLen, 0)
 
 	remaining := len(header.Payload) - maxChunk0Data
 	maxChunkNData := maxChunk - 1
@@ -280,30 +271,45 @@ func buildTXTAnswerChunks(rawFrame []byte, baseEncode bool) ([][]byte, error) {
 	rawChunk0[1] = byte(totalChunks)
 	copy(rawChunk0[2:], rawFrame[:headerLen])
 	copy(rawChunk0[2+headerLen:], header.Payload[:chunk0DataLen])
+
 	if !baseEncode {
 		chunks = append(chunks, appendLengthPrefixedTXT(rawChunk0))
-	} else {
-		chunks = append(chunks, appendLengthPrefixedTXT(baseCodec.EncodeRawBase64(rawChunk0)))
+		return appendRawTXTAnswerChunks(chunks, header.Payload, maxChunk0Data, maxChunkNData), nil
 	}
 
-	cursor := maxChunk0Data
-	for chunkID := 1; cursor < len(header.Payload); chunkID++ {
-		end := cursor + maxChunkNData
-		if end > len(header.Payload) {
-			end = len(header.Payload)
-		}
+	chunks = append(chunks, appendLengthPrefixedTXT(baseCodec.EncodeRawBase64(rawChunk0)))
+	return appendBase64TXTAnswerChunks(chunks, header.Payload, maxChunk0Data, maxChunkNData), nil
+}
+
+func buildTXTAnswerChunk(data []byte, baseEncode bool) []byte {
+	if !baseEncode {
+		return appendLengthPrefixedTXT(data)
+	}
+	return appendLengthPrefixedTXT(baseCodec.EncodeRawBase64(data))
+}
+
+func appendRawTXTAnswerChunks(chunks [][]byte, payload []byte, cursor int, maxChunkNData int) [][]byte {
+	for chunkID := 1; cursor < len(payload); chunkID++ {
+		end := min(cursor+maxChunkNData, len(payload))
 		rawChunk := make([]byte, 1+end-cursor)
 		rawChunk[0] = byte(chunkID)
-		copy(rawChunk[1:], header.Payload[cursor:end])
-		if !baseEncode {
-			chunks = append(chunks, appendLengthPrefixedTXT(rawChunk))
-		} else {
-			chunks = append(chunks, appendLengthPrefixedTXT(baseCodec.EncodeRawBase64(rawChunk)))
-		}
+		copy(rawChunk[1:], payload[cursor:end])
+		chunks = append(chunks, appendLengthPrefixedTXT(rawChunk))
 		cursor = end
 	}
+	return chunks
+}
 
-	return chunks, nil
+func appendBase64TXTAnswerChunks(chunks [][]byte, payload []byte, cursor int, maxChunkNData int) [][]byte {
+	for chunkID := 1; cursor < len(payload); chunkID++ {
+		end := min(cursor+maxChunkNData, len(payload))
+		rawChunk := make([]byte, 1+end-cursor)
+		rawChunk[0] = byte(chunkID)
+		copy(rawChunk[1:], payload[cursor:end])
+		chunks = append(chunks, appendLengthPrefixedTXT(baseCodec.EncodeRawBase64(rawChunk)))
+		cursor = end
+	}
+	return chunks
 }
 
 func appendLengthPrefixedTXT(data []byte) []byte {
