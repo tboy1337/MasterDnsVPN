@@ -48,6 +48,7 @@ type Store struct {
 	pendingTimeout time.Duration
 	items          map[string]*list.Element
 	order          *list.List
+	pendingCount   int
 	mu             sync.Mutex
 	dirty          bool
 }
@@ -162,6 +163,7 @@ func (s *Store) LookupOrCreatePending(cacheKey []byte, domain string, qType uint
 	}
 	element := s.order.PushBack(&cacheNode{key: key, entry: entry})
 	s.items[key] = element
+	s.pendingCount++
 	s.dirty = true
 	s.evictIfNeeded()
 	return LookupResult{
@@ -214,6 +216,9 @@ func (s *Store) SetReady(cacheKey []byte, domain string, qType uint16, qClass ui
 
 	if element, ok := s.items[key]; ok {
 		node := element.Value.(*cacheNode)
+		if node.entry.Status == StatusPending && s.pendingCount > 0 {
+			s.pendingCount--
+		}
 		node.entry.Domain = domain
 		node.entry.QuestionType = qType
 		node.entry.QuestionClass = qClass
@@ -263,6 +268,15 @@ func (s *Store) Snapshot(cacheKey []byte) (Entry, bool) {
 	return entry, true
 }
 
+func (s *Store) HasPending() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.pendingCount > 0
+}
+
 func (s *Store) isExpired(entry *Entry, now time.Time) bool {
 	if entry == nil {
 		return true
@@ -288,6 +302,9 @@ func (s *Store) removeElement(element *list.Element) {
 		return
 	}
 	node := element.Value.(*cacheNode)
+	if node.entry.Status == StatusPending && s.pendingCount > 0 {
+		s.pendingCount--
+	}
 	delete(s.items, node.key)
 	s.order.Remove(element)
 	s.dirty = true
@@ -316,6 +333,7 @@ func (s *Store) LoadFromFile(path string, now time.Time) (int, error) {
 
 	s.items = make(map[string]*list.Element, s.maxRecords)
 	s.order.Init()
+	s.pendingCount = 0
 
 	loaded := 0
 	for _, item := range payload {

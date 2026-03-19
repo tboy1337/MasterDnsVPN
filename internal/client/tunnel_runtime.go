@@ -24,76 +24,6 @@ import (
 var ErrTunnelDNSDispatchFailed = errors.New("dns tunnel dispatch failed")
 var ErrTunnelDNSFragmentTooLarge = errors.New("dns tunnel payload exceeds fragment limit")
 
-func (c *Client) dispatchDNSQuery(request *dnsDispatchRequest) (response []byte, err error) {
-	if c == nil || request == nil || len(request.Query) == 0 {
-		return nil, ErrTunnelDNSDispatchFailed
-	}
-	if !c.SessionReady() {
-		return nil, ErrSessionInitFailed
-	}
-
-	var packet VpnProto.Packet
-	if c.stream0Runtime != nil && c.stream0Runtime.IsRunning() {
-		timeout := time.Duration(c.cfg.LocalDNSPendingTimeoutSec * float64(time.Second))
-		packet, err = c.stream0Runtime.ExchangeDNSQuery(request.Query, timeout)
-	} else {
-		packet, err = c.exchangeMainStreamPacket(Enums.PACKET_DNS_QUERY_REQ, request.Query)
-	}
-	if err != nil {
-		return nil, err
-	}
-	if packet.PacketType != Enums.PACKET_DNS_QUERY_RES {
-		return nil, ErrTunnelDNSDispatchFailed
-	}
-	if len(packet.Payload) < 12 {
-		return nil, ErrTunnelDNSDispatchFailed
-	}
-	if shouldCacheTunnelDNSResponse(packet.Payload) {
-		c.localDNSCache.SetReady(
-			request.CacheKey,
-			request.Domain,
-			request.QType,
-			request.QClass,
-			packet.Payload,
-			c.now(),
-		)
-	}
-	return packet.Payload, nil
-}
-
-func (c *Client) exchangeMainStreamPacket(packetType uint8, payload []byte) (VpnProto.Packet, error) {
-	if c == nil {
-		return VpnProto.Packet{}, ErrTunnelDNSDispatchFailed
-	}
-
-	timeout := normalizeTimeout(time.Duration(c.cfg.LocalDNSPendingTimeoutSec*float64(time.Second)), defaultRuntimeTimeout)
-	connections, err := c.runtimeConnections(nil)
-	if err != nil {
-		return VpnProto.Packet{}, err
-	}
-
-	sequenceNum := c.nextMainSequence()
-	return c.sendMainStreamPacket(packetType, sequenceNum, payload, connections, timeout)
-}
-
-func (c *Client) sendMainStreamPacket(packetType uint8, sequenceNum uint16, payload []byte, connections []Connection, timeout time.Duration) (VpnProto.Packet, error) {
-	if c == nil {
-		return VpnProto.Packet{}, ErrTunnelDNSDispatchFailed
-	}
-	timeout = normalizeTimeout(timeout, defaultRuntimeTimeout)
-	connections, err := c.runtimeConnections(connections)
-	if err != nil {
-		return VpnProto.Packet{}, err
-	}
-	return tryConnections(connections, ErrTunnelDNSDispatchFailed, func(connection Connection) (VpnProto.Packet, error) {
-		return c.sendMainStreamPacketWithConnection(connection, packetType, sequenceNum, payload, timeout)
-	})
-}
-
-func (c *Client) sendMainStreamPacketWithConnection(connection Connection, packetType uint8, sequenceNum uint16, payload []byte, timeout time.Duration) (VpnProto.Packet, error) {
-	return c.sendFragmentedStreamPacketWithConnection(connection, packetType, 0, sequenceNum, payload, timeout, ErrTunnelDNSDispatchFailed)
-}
-
 func (c *Client) sendScheduledPacket(packet arq.QueuedPacket) (VpnProto.Packet, error) {
 	if c == nil {
 		return VpnProto.Packet{}, ErrTunnelDNSDispatchFailed
@@ -106,8 +36,8 @@ func (c *Client) sendScheduledPacket(packet arq.QueuedPacket) (VpnProto.Packet, 
 	}
 
 	switch packet.PacketType {
-	case Enums.PACKET_DNS_QUERY_REQ:
-		return c.sendMainStreamPacket(packet.PacketType, packet.SequenceNum, packet.Payload, connections, timeout)
+	case Enums.PACKET_DNS_QUERY_REQ, Enums.PACKET_DNS_QUERY_RES_ACK:
+		return c.sendMainQueuedPacket(packet, connections, timeout)
 	case Enums.PACKET_PING:
 		return c.sendSessionControlPacket(packet.PacketType, packet.Payload, connections, timeout)
 	default:
@@ -139,6 +69,43 @@ func (c *Client) sendStreamPacket(packet arq.QueuedPacket, connections []Connect
 	})
 }
 
+func (c *Client) sendMainQueuedPacket(packet arq.QueuedPacket, connections []Connection, timeout time.Duration) (VpnProto.Packet, error) {
+	if c == nil {
+		return VpnProto.Packet{}, ErrTunnelDNSDispatchFailed
+	}
+	timeout = normalizeTimeout(timeout, defaultRuntimeTimeout)
+	connections, err := c.runtimeConnections(connections)
+	if err != nil {
+		return VpnProto.Packet{}, err
+	}
+	return tryConnections(connections, ErrTunnelDNSDispatchFailed, func(connection Connection) (VpnProto.Packet, error) {
+		return c.sendMainQueuedPacketWithConnection(connection, packet, timeout)
+	})
+}
+
+func (c *Client) sendMainQueuedPacketWithConnection(connection Connection, packet arq.QueuedPacket, timeout time.Duration) (VpnProto.Packet, error) {
+	query, err := c.buildTunnelTXTQuery(connection.Domain, VpnProto.BuildOptions{
+		SessionID:       c.sessionID,
+		PacketType:      packet.PacketType,
+		SessionCookie:   c.sessionCookie,
+		StreamID:        0,
+		SequenceNum:     packet.SequenceNum,
+		FragmentID:      packet.FragmentID,
+		TotalFragments:  normalizeMainTotalFragments(packet.TotalFragments),
+		CompressionType: packet.CompressionType,
+		Payload:         packet.Payload,
+	})
+	if err != nil {
+		return VpnProto.Packet{}, err
+	}
+
+	response, err := c.exchangeDNSOverConnection(connection, query, timeout)
+	if err != nil {
+		return VpnProto.Packet{}, err
+	}
+	return c.parseValidatedServerPacket(response, ErrTunnelDNSDispatchFailed)
+}
+
 func (c *Client) buildSessionControlQuery(domain string, packetType uint8, payload []byte) ([]byte, error) {
 	return c.buildTunnelTXTQuery(domain, VpnProto.BuildOptions{
 		SessionID:     c.sessionID,
@@ -154,6 +121,38 @@ func (c *Client) fragmentMainStreamPayload(domain string, packetType uint8, payl
 	}
 
 	limit := c.maxMainStreamFragmentPayload(domain, packetType)
+	if limit < 1 {
+		return nil, ErrTunnelDNSDispatchFailed
+	}
+	if len(payload) <= limit {
+		return [][]byte{payload}, nil
+	}
+
+	total := (len(payload) + limit - 1) / limit
+	if total > 255 {
+		return nil, ErrTunnelDNSFragmentTooLarge
+	}
+
+	fragments := make([][]byte, 0, total)
+	for start := 0; start < len(payload); start += limit {
+		end := start + limit
+		if end > len(payload) {
+			end = len(payload)
+		}
+		fragments = append(fragments, payload[start:end])
+	}
+	return fragments, nil
+}
+
+func (c *Client) fragmentQueuedMainPayload(packetType uint8, payload []byte) ([][]byte, error) {
+	if c == nil {
+		return nil, ErrTunnelDNSDispatchFailed
+	}
+	if len(payload) == 0 {
+		return [][]byte{{}}, nil
+	}
+
+	limit := c.maxQueuedMainFragmentPayload(packetType)
 	if limit < 1 {
 		return nil, ErrTunnelDNSDispatchFailed
 	}
@@ -229,6 +228,30 @@ func (c *Client) nextMainSequence() uint16 {
 		c.mainSequence = 1
 	}
 	return c.mainSequence
+}
+
+func normalizeMainTotalFragments(total uint8) uint8 {
+	if total == 0 {
+		return 1
+	}
+	return total
+}
+
+func (c *Client) maxQueuedMainFragmentPayload(packetType uint8) int {
+	if c == nil {
+		return 0
+	}
+	best := 0
+	for _, domain := range c.cfg.Domains {
+		limit := c.maxMainStreamFragmentPayload(domain, packetType)
+		if limit <= 0 {
+			continue
+		}
+		if best == 0 || limit < best {
+			best = limit
+		}
+	}
+	return best
 }
 
 func (c *Client) maxMainStreamFragmentPayload(domain string, packetType uint8) int {
@@ -338,20 +361,28 @@ func (c *Client) sendSessionControlPacket(packetType uint8, payload []byte, conn
 		return VpnProto.Packet{}, err
 	}
 	return tryConnections(connections, ErrTunnelDNSDispatchFailed, func(connection Connection) (VpnProto.Packet, error) {
-		query, err := c.buildSessionControlQuery(connection.Domain, packetType, payload)
-		if err != nil {
-			return VpnProto.Packet{}, err
-		}
-
-		response, err := c.exchangeDNSOverConnection(connection, query, timeout)
-		if err != nil {
-			return VpnProto.Packet{}, err
-		}
-
-		packet, err := DnsParser.ExtractVPNResponse(response, c.responseMode == mtuProbeBase64Reply)
-		if err != nil || !c.validateServerPacket(packet) {
-			return VpnProto.Packet{}, ErrTunnelDNSDispatchFailed
-		}
-		return packet, nil
+		return c.sendSessionControlPacketWithConnection(connection, packetType, payload, timeout)
 	})
+}
+
+func (c *Client) sendSessionControlPacketWithConnection(connection Connection, packetType uint8, payload []byte, timeout time.Duration) (VpnProto.Packet, error) {
+	query, err := c.buildSessionControlQuery(connection.Domain, packetType, payload)
+	if err != nil {
+		return VpnProto.Packet{}, err
+	}
+
+	response, err := c.exchangeDNSOverConnection(connection, query, timeout)
+	if err != nil {
+		return VpnProto.Packet{}, err
+	}
+
+	return c.parseValidatedServerPacket(response, ErrTunnelDNSDispatchFailed)
+}
+
+func (c *Client) parseValidatedServerPacket(response []byte, fallbackErr error) (VpnProto.Packet, error) {
+	packet, err := DnsParser.ExtractVPNResponse(response, c.responseMode == mtuProbeBase64Reply)
+	if err != nil || !c.validateServerPacket(packet) {
+		return VpnProto.Packet{}, fallbackErr
+	}
+	return packet, nil
 }

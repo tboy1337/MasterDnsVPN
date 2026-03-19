@@ -80,7 +80,8 @@ type fragmentKey struct {
 	packetType  uint8
 	streamID    uint16
 	sequenceNum uint16
-	payload     string
+	fragmentID  uint8
+	total       uint8
 }
 
 type packetPriorityHeap []*queuedItem
@@ -459,7 +460,8 @@ func (o *queueOwner) track(packet QueuedPacket) bool {
 			packetType:  packet.PacketType,
 			streamID:    packet.StreamID,
 			sequenceNum: packet.SequenceNum,
-			payload:     string(packet.Payload),
+			fragmentID:  packet.FragmentID,
+			total:       packet.TotalFragments,
 		}
 		if _, exists := o.trackFragments[key]; exists {
 			return false
@@ -498,7 +500,8 @@ func (o *queueOwner) release(packet QueuedPacket) {
 				packetType:  packet.PacketType,
 				streamID:    packet.StreamID,
 				sequenceNum: packet.SequenceNum,
-				payload:     string(packet.Payload),
+				fragmentID:  packet.FragmentID,
+				total:       packet.TotalFragments,
 			})
 		}
 	}
@@ -552,6 +555,8 @@ func DefaultPriorityForPacket(packetType uint8) int {
 	switch packetType {
 	case Enums.PACKET_DNS_QUERY_REQ, Enums.PACKET_DNS_QUERY_RES:
 		return 2
+	case Enums.PACKET_DNS_QUERY_REQ_ACK, Enums.PACKET_DNS_QUERY_RES_ACK:
+		return 1
 	case Enums.PACKET_PING, Enums.PACKET_PONG:
 		return 4
 	case Enums.PACKET_STREAM_DATA:
@@ -675,7 +680,9 @@ func isFragmentKeyedQueuePacket(packetType uint8) bool {
 	return packetType == Enums.PACKET_SOCKS5_SYN ||
 		packetType == Enums.PACKET_SOCKS5_SYN_ACK ||
 		packetType == Enums.PACKET_DNS_QUERY_REQ ||
-		packetType == Enums.PACKET_DNS_QUERY_RES
+		packetType == Enums.PACKET_DNS_QUERY_RES ||
+		packetType == Enums.PACKET_DNS_QUERY_REQ_ACK ||
+		packetType == Enums.PACKET_DNS_QUERY_RES_ACK
 }
 
 func isPackableControlPacket(packet QueuedPacket) bool {

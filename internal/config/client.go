@@ -41,6 +41,7 @@ type ClientConfig struct {
 	LocalDNSCacheMaxRecords    int               `toml:"LOCAL_DNS_CACHE_MAX_RECORDS"`
 	LocalDNSCacheTTLSeconds    float64           `toml:"LOCAL_DNS_CACHE_TTL_SECONDS"`
 	LocalDNSPendingTimeoutSec  float64           `toml:"LOCAL_DNS_PENDING_TIMEOUT_SECONDS"`
+	LocalDNSFragmentTimeoutSec float64           `toml:"LOCAL_DNS_FRAGMENT_ASSEMBLY_TIMEOUT_SECONDS"`
 	LocalDNSCachePersist       bool              `toml:"LOCAL_DNS_CACHE_PERSIST_TO_FILE"`
 	LocalDNSCacheFlushSec      float64           `toml:"LOCAL_DNS_CACHE_FLUSH_INTERVAL_SECONDS"`
 	ResolverBalancingStrategy  int               `toml:"RESOLVER_BALANCING_STRATEGY"`
@@ -95,7 +96,8 @@ func defaultClientConfig() ClientConfig {
 		LocalDNSQueueSize:          512,
 		LocalDNSCacheMaxRecords:    2000,
 		LocalDNSCacheTTLSeconds:    3600.0,
-		LocalDNSPendingTimeoutSec:  30.0,
+		LocalDNSPendingTimeoutSec:  600.0,
+		LocalDNSFragmentTimeoutSec: 300.0,
 		LocalDNSCachePersist:       true,
 		LocalDNSCacheFlushSec:      60.0,
 		ResolverBalancingStrategy:  0,
@@ -217,7 +219,10 @@ func LoadClientConfig(filename string) (ClientConfig, error) {
 		cfg.LocalDNSCacheTTLSeconds = 3600.0
 	}
 	if cfg.LocalDNSPendingTimeoutSec <= 0 {
-		cfg.LocalDNSPendingTimeoutSec = 30.0
+		cfg.LocalDNSPendingTimeoutSec = 600.0
+	}
+	if cfg.LocalDNSFragmentTimeoutSec <= 0 {
+		cfg.LocalDNSFragmentTimeoutSec = 300.0
 	}
 	if cfg.LocalDNSCacheFlushSec <= 0 {
 		cfg.LocalDNSCacheFlushSec = 60.0

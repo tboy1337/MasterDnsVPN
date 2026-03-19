@@ -12,6 +12,36 @@ import (
 	"time"
 )
 
+func (c *Client) persistResolvedLocalDNSCacheEntry(cacheKey []byte, domain string, qType uint16, qClass uint16, rawResponse []byte, now time.Time) {
+	if c == nil || c.localDNSCache == nil {
+		return
+	}
+
+	c.localDNSCache.SetReady(cacheKey, domain, qType, qClass, rawResponse, now)
+	if c.cfg.LocalDNSCachePersist {
+		c.flushLocalDNSCache()
+	}
+}
+
+func (c *Client) ensureLocalDNSCacheLoaded() {
+	if c == nil {
+		return
+	}
+	c.localDNSCacheLoadOnce.Do(func() {
+		c.loadLocalDNSCache()
+	})
+}
+
+func (c *Client) ensureLocalDNSCachePersistence(ctx context.Context) {
+	if c == nil {
+		return
+	}
+	c.ensureLocalDNSCacheLoaded()
+	c.localDNSCacheFlushOnce.Do(func() {
+		go c.runLocalDNSCacheFlushLoop(ctx)
+	})
+}
+
 func (c *Client) loadLocalDNSCache() {
 	if c == nil || !c.cfg.LocalDNSCachePersist || c.localDNSCache == nil {
 		return

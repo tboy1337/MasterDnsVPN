@@ -8,19 +8,16 @@
 package client
 
 import (
-	"time"
-
 	"masterdnsvpn-go/internal/dnscache"
 	DnsParser "masterdnsvpn-go/internal/dnsparser"
 	Enums "masterdnsvpn-go/internal/enums"
 )
 
 type dnsDispatchRequest struct {
-	CacheKey []byte
-	Query    []byte
-	Domain   string
-	QType    uint16
-	QClass   uint16
+	Query  []byte
+	Domain string
+	QType  uint16
+	QClass uint16
 }
 
 type dnsQueryMetadata struct {
@@ -31,6 +28,8 @@ type dnsQueryMetadata struct {
 }
 
 func (c *Client) handleDNSQueryPacket(query []byte) ([]byte, *dnsDispatchRequest) {
+	c.ensureLocalDNSCacheLoaded()
+
 	metadata, err := parseDNSQueryMetadata(query)
 	if err != nil {
 		if err == DnsParser.ErrNotDNSRequest || err == DnsParser.ErrPacketTooShort {
@@ -57,7 +56,6 @@ func (c *Client) handleDNSQueryPacket(query []byte) ([]byte, *dnsDispatchRequest
 	}
 	now := c.now()
 	if cached, ok := c.localDNSCache.GetReady(cacheKey, query, now); ok {
-		c.dnsInflight.Complete(cacheKey)
 		if c.log != nil {
 			c.log.Infof(
 				"📦 <green>Local DNS Cache Hit</green> <magenta>|</magenta> <blue>Domain</blue>: <cyan>%s</cyan> <magenta>|</magenta> <blue>Type</blue>: <yellow>%s</yellow>",
@@ -78,11 +76,10 @@ func (c *Client) handleDNSQueryPacket(query []byte) ([]byte, *dnsDispatchRequest
 	}
 
 	dispatch := &dnsDispatchRequest{
-		CacheKey: cacheKey,
-		Query:    query,
-		Domain:   metadata.Domain,
-		QType:    metadata.QType,
-		QClass:   metadata.QClass,
+		Query:  query,
+		Domain: metadata.Domain,
+		QType:  metadata.QType,
+		QClass: metadata.QClass,
 	}
 	return response, dispatch
 }
@@ -93,30 +90,6 @@ func (c *Client) resolveDNSQueryPacket(query []byte) []byte {
 		return response
 	}
 
-	now := c.now()
-	inflightEntry, leader := c.dnsInflight.Acquire(dispatch.CacheKey, now)
-	recordTypeName := ""
-	if c.log != nil {
-		recordTypeName = Enums.DNSRecordTypeName(dispatch.QType)
-	}
-	if !leader {
-		if c.log != nil {
-			c.log.Infof(
-				"🧩 <green>Local DNS Inflight Reused</green> <magenta>|</magenta> <blue>Domain</blue>: <cyan>%s</cyan> <magenta>|</magenta> <blue>Type</blue>: <yellow>%s</yellow>",
-				dispatch.Domain,
-				recordTypeName,
-			)
-		}
-		if c.dnsInflight.Wait(inflightEntry, time.Duration(c.cfg.LocalDNSPendingTimeoutSec*float64(time.Second))) {
-			if cached, ok := c.localDNSCache.GetReady(dispatch.CacheKey, query, c.now()); ok {
-				return cached
-			}
-		}
-		return response
-	}
-
-	defer c.dnsInflight.Resolve(dispatch.CacheKey)
-
 	if c.stream0Runtime != nil && c.stream0Runtime.IsRunning() {
 		c.stream0Runtime.NotifyDNSActivity()
 	}
@@ -124,29 +97,10 @@ func (c *Client) resolveDNSQueryPacket(query []byte) []byte {
 		c.log.Infof(
 			"🚇 <green>Local DNS Redirected To Tunnel</green> <magenta>|</magenta> <blue>Domain</blue>: <cyan>%s</cyan> <magenta>|</magenta> <blue>Type</blue>: <yellow>%s</yellow>",
 			dispatch.Domain,
-			recordTypeName,
+			Enums.DNSRecordTypeName(dispatch.QType),
 		)
 	}
-
-	tunnelResponse, err := c.dispatchDNSQuery(dispatch)
-	if err == nil && len(tunnelResponse) != 0 {
-		if c.log != nil {
-			c.log.Infof(
-				"✅ <green>Local DNS Resolved</green> <magenta>|</magenta> <blue>Domain</blue>: <cyan>%s</cyan> <magenta>|</magenta> <blue>Type</blue>: <yellow>%s</yellow> <magenta>|</magenta> <blue>Path</blue>: <yellow>Tunnel</yellow>",
-				dispatch.Domain,
-				recordTypeName,
-			)
-		}
-		return tunnelResponse
-	}
-	if c.log != nil {
-		c.log.Warnf(
-			"⚠️ <yellow>Local DNS Resolve Failed</yellow> <magenta>|</magenta> <blue>Domain</blue>: <cyan>%s</cyan> <magenta>|</magenta> <blue>Type</blue>: <yellow>%s</yellow> <magenta>|</magenta> <blue>Error</blue>: <red>%v</red>",
-			dispatch.Domain,
-			recordTypeName,
-			err,
-		)
-	}
+	c.queueDNSDispatch(dispatch)
 	return response
 }
 

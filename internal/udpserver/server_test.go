@@ -569,13 +569,13 @@ func TestStreamOutboundStoreSupportsWindowAndOutOfOrderAck(t *testing.T) {
 		t.Fatalf("unexpected second outbound packet: ok=%v packet=%+v", ok, second)
 	}
 
-	if !store.Ack(7, Enums.PACKET_STREAM_DATA_ACK, 11, 2) {
+	if !store.Ack(7, Enums.PACKET_STREAM_DATA_ACK, 11, 2, 0, 0) {
 		t.Fatal("expected out-of-order ack to clear second pending packet")
 	}
-	if store.Ack(7, Enums.PACKET_STREAM_DATA_ACK, 11, 9) {
+	if store.Ack(7, Enums.PACKET_STREAM_DATA_ACK, 11, 9, 0, 0) {
 		t.Fatal("unexpected ack match for unknown sequence")
 	}
-	if !store.Ack(7, Enums.PACKET_STREAM_DATA_ACK, 11, 1) {
+	if !store.Ack(7, Enums.PACKET_STREAM_DATA_ACK, 11, 1, 0, 0) {
 		t.Fatal("expected first packet ack to clear remaining pending packet")
 	}
 	if _, ok := store.Next(7, now); ok {
@@ -713,7 +713,7 @@ func TestStreamOutboundStoreRoundRobinsEqualPriorityStreamData(t *testing.T) {
 	if !ok || first.StreamID != 1 {
 		t.Fatalf("unexpected first packet: ok=%v packet=%+v", ok, first)
 	}
-	if !store.Ack(5, Enums.PACKET_STREAM_DATA_ACK, first.StreamID, first.SequenceNum) {
+	if !store.Ack(5, Enums.PACKET_STREAM_DATA_ACK, first.StreamID, first.SequenceNum, 0, 0) {
 		t.Fatal("expected first packet ack to succeed")
 	}
 
@@ -800,7 +800,7 @@ func TestStreamOutboundStoreAdaptsRetryBaseAfterAck(t *testing.T) {
 		t.Fatal("expected second enqueue to succeed")
 	}
 
-	if !store.Ack(7, Enums.PACKET_STREAM_DATA_ACK, 3, 1) {
+	if !store.Ack(7, Enums.PACKET_STREAM_DATA_ACK, 3, 1, 0, 0) {
 		t.Fatal("expected ack to succeed")
 	}
 	_, ok = store.Next(7, now.Add(time.Second))
@@ -1333,21 +1333,35 @@ func TestHandlePacketRespondsToDNSQueryRequest(t *testing.T) {
 	query := buildTunnelDNSQuery(t, codec, "a.com", sessionID, sessionCookie, 17, rawQuery)
 	response := srv.handlePacket(query)
 	if len(response) == 0 {
-		t.Fatal("expected dns query response packet")
+		t.Fatal("expected dns query ack packet")
 	}
 
 	vpnResponse, err := DnsParser.ExtractVPNResponse(response, false)
 	if err != nil {
 		t.Fatalf("ExtractVPNResponse returned error: %v", err)
 	}
-	if vpnResponse.PacketType != Enums.PACKET_DNS_QUERY_RES {
-		t.Fatalf("unexpected packet type: got=%d want=%d", vpnResponse.PacketType, Enums.PACKET_DNS_QUERY_RES)
+	if vpnResponse.PacketType != Enums.PACKET_DNS_QUERY_REQ_ACK {
+		t.Fatalf("unexpected packet type: got=%d want=%d", vpnResponse.PacketType, Enums.PACKET_DNS_QUERY_REQ_ACK)
 	}
 	if vpnResponse.StreamID != 0 || vpnResponse.SequenceNum != 17 {
 		t.Fatalf("unexpected stream routing: stream=%d seq=%d", vpnResponse.StreamID, vpnResponse.SequenceNum)
 	}
 	if vpnResponse.SessionID != sessionID || vpnResponse.SessionCookie != sessionCookie {
 		t.Fatalf("unexpected session routing: sid=%d cookie=%d", vpnResponse.SessionID, vpnResponse.SessionCookie)
+	}
+
+	pingQuery := buildTunnelQueryWithCookie(t, codec, "a.com", sessionID, sessionCookie, Enums.PACKET_PING, []byte("PO:test"))
+	pingResponse := srv.handlePacket(pingQuery)
+	if len(pingResponse) == 0 {
+		t.Fatal("expected queued dns response packet")
+	}
+
+	vpnResponse, err = DnsParser.ExtractVPNResponse(pingResponse, false)
+	if err != nil {
+		t.Fatalf("ExtractVPNResponse returned error: %v", err)
+	}
+	if vpnResponse.PacketType != Enums.PACKET_DNS_QUERY_RES {
+		t.Fatalf("unexpected packet type: got=%d want=%d", vpnResponse.PacketType, Enums.PACKET_DNS_QUERY_RES)
 	}
 
 	dnsResponse, err := DnsParser.ParsePacketLite(vpnResponse.Payload)
@@ -1406,16 +1420,23 @@ func TestHandlePacketAssemblesFragmentedDNSQueryRequest(t *testing.T) {
 	firstQuery := buildTunnelDNSQueryFragment(t, codec, "a.com", sessionID, sessionCookie, 19, 0, 2, fragment0)
 	firstResponse := srv.handlePacket(firstQuery)
 	if len(firstResponse) == 0 {
-		t.Fatal("expected placeholder dns response for first fragment")
+		t.Fatal("expected dns ack for first fragment")
 	}
 	if upstreamCalls != 0 {
 		t.Fatalf("upstream should not be called before final fragment, got=%d", upstreamCalls)
+	}
+	firstAck, err := DnsParser.ExtractVPNResponse(firstResponse, false)
+	if err != nil {
+		t.Fatalf("ExtractVPNResponse returned error: %v", err)
+	}
+	if firstAck.PacketType != Enums.PACKET_DNS_QUERY_REQ_ACK {
+		t.Fatalf("unexpected packet type: got=%d want=%d", firstAck.PacketType, Enums.PACKET_DNS_QUERY_REQ_ACK)
 	}
 
 	secondQuery := buildTunnelDNSQueryFragment(t, codec, "a.com", sessionID, sessionCookie, 19, 1, 2, fragment1)
 	secondResponse := srv.handlePacket(secondQuery)
 	if len(secondResponse) == 0 {
-		t.Fatal("expected dns response packet for final fragment")
+		t.Fatal("expected dns ack packet for final fragment")
 	}
 	if upstreamCalls != 1 {
 		t.Fatalf("unexpected upstream call count: got=%d want=1", upstreamCalls)
@@ -1425,8 +1446,110 @@ func TestHandlePacketAssemblesFragmentedDNSQueryRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExtractVPNResponse returned error: %v", err)
 	}
+	if vpnResponse.PacketType != Enums.PACKET_DNS_QUERY_REQ_ACK {
+		t.Fatalf("unexpected packet type: got=%d want=%d", vpnResponse.PacketType, Enums.PACKET_DNS_QUERY_REQ_ACK)
+	}
+
+	pingQuery := buildTunnelQueryWithCookie(t, codec, "a.com", sessionID, sessionCookie, Enums.PACKET_PING, []byte("PO:test"))
+	pingResponse := srv.handlePacket(pingQuery)
+	if len(pingResponse) == 0 {
+		t.Fatal("expected queued dns response packet")
+	}
+
+	vpnResponse, err = DnsParser.ExtractVPNResponse(pingResponse, false)
+	if err != nil {
+		t.Fatalf("ExtractVPNResponse returned error: %v", err)
+	}
 	if vpnResponse.PacketType != Enums.PACKET_DNS_QUERY_RES {
 		t.Fatalf("unexpected packet type: got=%d want=%d", vpnResponse.PacketType, Enums.PACKET_DNS_QUERY_RES)
+	}
+}
+
+func TestHandlePacketDoesNotReprocessCompletedSingleFragmentDNSQuery(t *testing.T) {
+	codec, err := security.NewCodec(0, "")
+	if err != nil {
+		t.Fatalf("NewCodec returned error: %v", err)
+	}
+
+	srv := New(config.ServerConfig{
+		MaxPacketSize:     65535,
+		Domain:            []string{"a.com"},
+		MinVPNLabelLength: 3,
+	}, nil, codec)
+
+	rawQuery := buildServerTestQuery(0x6666, "example.com", Enums.DNS_RECORD_TYPE_A)
+	var upstreamCalls int
+	srv.resolveDNSQueryFn = func(query []byte) ([]byte, error) {
+		upstreamCalls++
+		return DnsParser.BuildServerFailureResponse(query)
+	}
+
+	verifyCode := []byte{0x12, 0x34, 0x56, 0x78}
+	initPayload := []byte{
+		0,
+		0x00,
+		0x00, 0x96,
+		0x00, 0xC8,
+		verifyCode[0], verifyCode[1], verifyCode[2], verifyCode[3],
+	}
+	initResponse := srv.handlePacket(buildTunnelQueryWithSessionID(t, codec, "a.com", 0, Enums.PACKET_SESSION_INIT, initPayload))
+	packet, err := DnsParser.ExtractVPNResponse(initResponse, false)
+	if err != nil {
+		t.Fatalf("ExtractVPNResponse returned error: %v", err)
+	}
+
+	sessionID := packet.Payload[0]
+	sessionCookie := packet.Payload[1]
+	query := buildTunnelDNSQuery(t, codec, "a.com", sessionID, sessionCookie, 21, rawQuery)
+
+	firstResponse := srv.handlePacket(query)
+	if len(firstResponse) == 0 {
+		t.Fatal("expected initial dns ack packet")
+	}
+	if upstreamCalls != 1 {
+		t.Fatalf("expected exactly one upstream call after initial single-fragment query, got=%d", upstreamCalls)
+	}
+
+	secondResponse := srv.handlePacket(query)
+	if len(secondResponse) == 0 {
+		t.Fatal("expected duplicate dns ack packet")
+	}
+	if upstreamCalls != 1 {
+		t.Fatalf("duplicate completed single-fragment query must not reprocess upstream, got=%d", upstreamCalls)
+	}
+
+	vpnResponse, err := DnsParser.ExtractVPNResponse(secondResponse, false)
+	if err != nil {
+		t.Fatalf("ExtractVPNResponse returned error: %v", err)
+	}
+	if vpnResponse.PacketType != Enums.PACKET_DNS_QUERY_REQ_ACK {
+		t.Fatalf("unexpected packet type: got=%d want=%d", vpnResponse.PacketType, Enums.PACKET_DNS_QUERY_REQ_ACK)
+	}
+}
+
+func TestRemoveDNSQueryFragmentsForSessionClearsPendingAssembly(t *testing.T) {
+	codec, err := security.NewCodec(0, "")
+	if err != nil {
+		t.Fatalf("NewCodec returned error: %v", err)
+	}
+
+	srv := New(config.ServerConfig{
+		MaxPacketSize:     65535,
+		Domain:            []string{"a.com"},
+		MinVPNLabelLength: 3,
+	}, nil, codec)
+
+	now := time.Unix(1700000000, 0)
+	fragment0 := []byte("first")
+	fragment1 := []byte("second")
+	if _, ready, completed := srv.collectDNSQueryFragments(7, 31, fragment0, 0, 2, now); ready || completed {
+		t.Fatalf("expected first fragment to remain pending, ready=%v completed=%v", ready, completed)
+	}
+
+	srv.removeDNSQueryFragmentsForSession(7)
+
+	if _, ready, completed := srv.collectDNSQueryFragments(7, 31, fragment1, 1, 2, now.Add(time.Second)); ready || completed {
+		t.Fatalf("expected cleared session fragments to stay incomplete after only trailing fragment, ready=%v completed=%v", ready, completed)
 	}
 }
 

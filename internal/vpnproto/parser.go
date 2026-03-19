@@ -263,6 +263,8 @@ func buildPacketFlags() [256]uint8 {
 		Enums.PACKET_SOCKS5_UPSTREAM_UNAVAILABLE_ACK,
 		Enums.PACKET_DNS_QUERY_REQ,
 		Enums.PACKET_DNS_QUERY_RES,
+		Enums.PACKET_DNS_QUERY_REQ_ACK,
+		Enums.PACKET_DNS_QUERY_RES_ACK,
 	}
 	for _, packetType := range streamAndSeq {
 		set(packetType, packetFlagStream|packetFlagSequence)
@@ -276,6 +278,8 @@ func buildPacketFlags() [256]uint8 {
 		Enums.PACKET_SOCKS5_SYN,
 		Enums.PACKET_DNS_QUERY_REQ,
 		Enums.PACKET_DNS_QUERY_RES,
+		Enums.PACKET_DNS_QUERY_REQ_ACK,
+		Enums.PACKET_DNS_QUERY_RES_ACK,
 	}
 	for _, packetType := range frag {
 		flags[packetType] |= packetFlagFragment

@@ -223,6 +223,17 @@ func (s *sessionStore) Active(sessionID uint8) (*sessionSnapshot, bool) {
 	return &snapshot, true
 }
 
+func (s *sessionStore) HasActive(sessionID uint8) bool {
+	if s == nil || sessionID == 0 {
+		return false
+	}
+
+	s.mu.Lock()
+	active := s.byID[sessionID] != nil
+	s.mu.Unlock()
+	return active
+}
+
 func (s *sessionStore) Lookup(sessionID uint8) (sessionLookupResult, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

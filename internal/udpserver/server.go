@@ -26,6 +26,7 @@ import (
 	DnsParser "masterdnsvpn-go/internal/dnsparser"
 	domainMatcher "masterdnsvpn-go/internal/domainmatcher"
 	Enums "masterdnsvpn-go/internal/enums"
+	"masterdnsvpn-go/internal/fragmentstore"
 	"masterdnsvpn-go/internal/logger"
 	"masterdnsvpn-go/internal/security"
 	SocksProto "masterdnsvpn-go/internal/socksproto"
@@ -61,8 +62,8 @@ type Server struct {
 	dnsResolveInflight       *dnsResolveInflightManager
 	dnsUpstreamServers       []string
 	dnsUpstreamBufferPool    sync.Pool
-	dnsFragmentMu            sync.Mutex
-	dnsFragments             map[dnsFragmentKey]*dnsFragmentEntry
+	dnsFragments             *fragmentstore.Store[dnsFragmentKey]
+	dnsFragmentTimeout       time.Duration
 	resolveDNSQueryFn        func([]byte) ([]byte, error)
 	dialStreamUpstreamFn     func(string, string, time.Duration) (net.Conn, error)
 	uploadCompressionMask    uint8
@@ -96,6 +97,25 @@ type postSessionValidation struct {
 
 func New(cfg config.ServerConfig, log *logger.Logger, codec *security.Codec) *Server {
 	invalidCookieWindow := cfg.InvalidCookieWindow()
+	if invalidCookieWindow <= 0 {
+		invalidCookieWindow = 2 * time.Second
+	}
+	dnsFragmentTimeout := cfg.DNSFragmentAssemblyTimeout()
+	if dnsFragmentTimeout <= 0 {
+		dnsFragmentTimeout = 5 * time.Minute
+	}
+	dropLogInterval := cfg.DropLogInterval()
+	if dropLogInterval <= 0 {
+		dropLogInterval = 2 * time.Second
+	}
+	socksConnectTimeout := cfg.SOCKSConnectTimeout()
+	if socksConnectTimeout <= 0 {
+		socksConnectTimeout = 8 * time.Second
+	}
+	streamOutboundTTL := cfg.StreamOutboundTTL()
+	if streamOutboundTTL <= 0 {
+		streamOutboundTTL = 120 * time.Second
+	}
 	return &Server{
 		cfg:                  cfg,
 		log:                  log,
@@ -109,11 +129,12 @@ func New(cfg config.ServerConfig, log *logger.Logger, codec *security.Codec) *Se
 		dnsCache: dnsCache.New(
 			cfg.DNSCacheMaxRecords,
 			time.Duration(cfg.DNSCacheTTLSeconds*float64(time.Second)),
-			cfg.DNSFragmentAssemblyTimeout(),
+			dnsFragmentTimeout,
 		),
-		dnsResolveInflight: newDNSResolveInflightManager(cfg.DNSFragmentAssemblyTimeout()),
+		dnsResolveInflight: newDNSResolveInflightManager(dnsFragmentTimeout),
 		dnsUpstreamServers: append([]string(nil), cfg.DNSUpstreamServers...),
-		dnsFragments:       make(map[dnsFragmentKey]*dnsFragmentEntry, 32),
+		dnsFragments:       fragmentstore.New[dnsFragmentKey](32),
+		dnsFragmentTimeout: dnsFragmentTimeout,
 		dnsUpstreamBufferPool: sync.Pool{
 			New: func() any {
 				return make([]byte, 65535)
@@ -124,12 +145,12 @@ func New(cfg config.ServerConfig, log *logger.Logger, codec *security.Codec) *Se
 		},
 		uploadCompressionMask:    buildCompressionMask(cfg.SupportedUploadCompressionTypes),
 		downloadCompressionMask:  buildCompressionMask(cfg.SupportedDownloadCompressionTypes),
-		dropLogIntervalNanos:     cfg.DropLogInterval().Nanoseconds(),
+		dropLogIntervalNanos:     dropLogInterval.Nanoseconds(),
 		invalidCookieWindow:      invalidCookieWindow,
 		invalidCookieWindowNanos: invalidCookieWindow.Nanoseconds(),
 		invalidCookieThreshold:   cfg.InvalidCookieErrorThreshold,
-		socksConnectTimeout:      cfg.SOCKSConnectTimeout(),
-		streamOutboundTTL:        cfg.StreamOutboundTTL(),
+		socksConnectTimeout:      socksConnectTimeout,
+		streamOutboundTTL:        streamOutboundTTL,
 		streamOutboundMaxRetry:   cfg.StreamOutboundMaxRetries,
 		mtuProbePayloadPool: sync.Pool{
 			New: func() any {
@@ -161,15 +182,15 @@ func (s *Server) Run(ctx context.Context) error {
 	defer conn.Close()
 
 	if err := conn.SetReadBuffer(s.cfg.SocketBufferSize); err != nil {
-		s.log.Warnf("⚠️ <yellow>UDP Read Buffer Setup Failed, <cyan>%v</cyan></yellow>", err)
+		s.log.Warnf("âš ï¸ <yellow>UDP Read Buffer Setup Failed, <cyan>%v</cyan></yellow>", err)
 	}
 
 	if err := conn.SetWriteBuffer(s.cfg.SocketBufferSize); err != nil {
-		s.log.Warnf("⚠️ <yellow>UDP Write Buffer Setup Failed, <cyan>%v</cyan></yellow>", err)
+		s.log.Warnf("âš ï¸ <yellow>UDP Write Buffer Setup Failed, <cyan>%v</cyan></yellow>", err)
 	}
 
 	s.log.Infof(
-		"🛰️ <green>UDP Listener Ready, Addr: <cyan>%s</cyan>, Readers: <cyan>%d</cyan>, Workers: <cyan>%d</cyan>, Queue: <cyan>%d</cyan></green>",
+		"ðŸ›°ï¸ <green>UDP Listener Ready, Addr: <cyan>%s</cyan>, Readers: <cyan>%d</cyan>, Workers: <cyan>%d</cyan>, Queue: <cyan>%d</cyan></green>",
 		s.cfg.Address(),
 		s.cfg.UDPReaders,
 		s.cfg.DNSRequestWorkers,
@@ -259,9 +280,10 @@ func (s *Server) sessionCleanupLoop(ctx context.Context) {
 				s.streams.RemoveSession(sessionID)
 				s.streamOutbound.RemoveSession(sessionID)
 				s.deferredSession.RemoveSession(sessionID)
+				s.removeDNSQueryFragmentsForSession(sessionID)
 			}
 			s.log.Infof(
-				"🧹 <green>Expired Sessions Cleaned, Count: <cyan>%d</cyan></green>",
+				"ðŸ§¹ <green>Expired Sessions Cleaned, Count: <cyan>%d</cyan></green>",
 				len(expired),
 			)
 		}
@@ -280,7 +302,7 @@ func (s *Server) readLoop(ctx context.Context, conn *net.UDPConn, reqCh chan<- r
 			}
 
 			s.log.Debugf(
-				"📥 <yellow>UDP Read Error, Reader: <cyan>%d</cyan>, Error: <cyan>%v</cyan></yellow>",
+				"ðŸ“¥ <yellow>UDP Read Error, Reader: <cyan>%d</cyan>, Error: <cyan>%v</cyan></yellow>",
 				readerID,
 				err,
 			)
@@ -313,7 +335,7 @@ func (s *Server) worker(ctx context.Context, conn *net.UDPConn, reqCh <-chan req
 			if len(response) != 0 {
 				if _, err := conn.WriteToUDP(response, req.addr); err != nil {
 					s.log.Debugf(
-						"📤 <yellow>UDP Write Error, Worker: <cyan>%d</cyan>, Remote: <cyan>%v</cyan>, Error: <cyan>%v</cyan></yellow>",
+						"ðŸ“¤ <yellow>UDP Write Error, Worker: <cyan>%d</cyan>, Remote: <cyan>%v</cyan>, Error: <cyan>%v</cyan></yellow>",
 						workerID,
 						req.addr,
 						err,
@@ -331,7 +353,7 @@ func (s *Server) safeHandlePacket(packet []byte) (response []byte) {
 		if recovered := recover(); recovered != nil {
 			if s.log != nil {
 				s.log.Errorf(
-					"💥 <red>Packet Handler Panic Recovered, <yellow>%v</yellow></red>",
+					"ðŸ’¥ <red>Packet Handler Panic Recovered, <yellow>%v</yellow></red>",
 					recovered,
 				)
 			}
@@ -410,6 +432,8 @@ func (s *Server) handlePostSessionPacket(decision domainMatcher.Decision, vpnPac
 		return s.handleStreamAckPacket(vpnPacket, sessionRecord)
 	case Enums.PACKET_DNS_QUERY_REQ:
 		return s.handleDNSQueryRequest(decision, vpnPacket, sessionRecord)
+	case Enums.PACKET_DNS_QUERY_RES_ACK:
+		return s.handleDNSQueryResponseAck(vpnPacket, sessionRecord)
 	case Enums.PACKET_STREAM_SYN:
 		return s.handleStreamSynRequest(vpnPacket, sessionRecord)
 	case Enums.PACKET_SOCKS5_SYN:
@@ -464,7 +488,7 @@ func (s *Server) validatePostSessionPacket(questionPacket []byte, requestName st
 func (s *Server) logInvalidSessionThreshold(sessionID uint8, receivedCookie uint8, lookup sessionLookupResult, known bool) {
 	if !known {
 		s.log.Debugf(
-			"🧷 <yellow>Unknown Session Cookie Threshold Reached, Session: <cyan>%d</cyan>, Received: <cyan>%d</cyan></yellow>",
+			"ðŸ§· <yellow>Unknown Session Cookie Threshold Reached, Session: <cyan>%d</cyan>, Received: <cyan>%d</cyan></yellow>",
 			sessionID,
 			receivedCookie,
 		)
@@ -473,7 +497,7 @@ func (s *Server) logInvalidSessionThreshold(sessionID uint8, receivedCookie uint
 
 	if lookup.State == sessionLookupClosed {
 		s.log.Debugf(
-			"🧷 <yellow>Stale Closed Session Cookie Threshold Reached, Session: <cyan>%d</cyan>, Expected: <cyan>%d</cyan>, Received: <cyan>%d</cyan></yellow>",
+			"ðŸ§· <yellow>Stale Closed Session Cookie Threshold Reached, Session: <cyan>%d</cyan>, Expected: <cyan>%d</cyan>, Received: <cyan>%d</cyan></yellow>",
 			sessionID,
 			lookup.Cookie,
 			receivedCookie,
@@ -482,7 +506,7 @@ func (s *Server) logInvalidSessionThreshold(sessionID uint8, receivedCookie uint
 	}
 
 	s.log.Debugf(
-		"🧷 <yellow>Invalid Session Cookie Threshold Reached, Session: <cyan>%d</cyan>, Expected: <cyan>%d</cyan>, Received: <cyan>%d</cyan></yellow>",
+		"ðŸ§· <yellow>Invalid Session Cookie Threshold Reached, Session: <cyan>%d</cyan>, Expected: <cyan>%d</cyan>, Received: <cyan>%d</cyan></yellow>",
 		sessionID,
 		lookup.Cookie,
 		receivedCookie,
@@ -543,7 +567,7 @@ func (s *Server) buildSessionVPNResponse(questionPacket []byte, requestName stri
 }
 
 func (s *Server) queueSessionPacket(sessionID uint8, packet VpnProto.Packet) bool {
-	if s == nil || sessionID == 0 {
+	if s == nil || sessionID == 0 || !s.sessions.HasActive(sessionID) {
 		return false
 	}
 	streamExists := packet.StreamID != 0 && s.streams.Exists(sessionID, packet.StreamID)
@@ -555,7 +579,7 @@ func (s *Server) queueSessionPacket(sessionID uint8, packet VpnProto.Packet) boo
 }
 
 func (s *Server) queueMainSessionPacket(sessionID uint8, packet VpnProto.Packet) bool {
-	if s == nil || sessionID == 0 {
+	if s == nil || sessionID == 0 || !s.sessions.HasActive(sessionID) {
 		return false
 	}
 	return s.streamOutbound.Enqueue(sessionID, arq.QueueTargetMain, packet)
@@ -653,7 +677,7 @@ func (s *Server) handleSessionInitRequest(questionPacket []byte, decision domain
 	if err != nil {
 		if err == ErrSessionTableFull && s.log != nil {
 			s.log.Errorf(
-				"🚫 <red>Session Table Full Request: <cyan>SESSION_INIT</cyan>, Domain: <cyan>%s</cyan></red>",
+				"ðŸš« <red>Session Table Full Request: <cyan>SESSION_INIT</cyan>, Domain: <cyan>%s</cyan></red>",
 				decision.RequestName,
 			)
 		}
@@ -666,7 +690,7 @@ func (s *Server) handleSessionInitRequest(questionPacket []byte, decision domain
 
 	if !reused && s.log != nil {
 		s.log.Infof(
-			"🤝 <green>Session Created, ID: <cyan>%d</cyan>, Mode: <cyan>%s</cyan>, Upload Compression: <cyan>%s</cyan>, Download Compression: <cyan>%s</cyan></green>",
+			"ðŸ¤ <green>Session Created, ID: <cyan>%d</cyan>, Mode: <cyan>%s</cyan>, Upload Compression: <cyan>%s</cyan>, Download Compression: <cyan>%s</cyan></green>",
 			record.ID,
 			sessionResponseModeName(record.ResponseMode),
 			compression.TypeName(record.UploadCompression),
@@ -735,7 +759,7 @@ func (s *Server) onDrop(addr *net.UDPAddr) {
 	}
 
 	s.log.Warnf(
-		"🚧 <yellow>Request Queue Overloaded</yellow> <magenta>|</magenta> <blue>Dropped</blue>: <magenta>%d</magenta> <magenta>|</magenta> <blue>Remote</blue>: <cyan>%v</cyan>",
+		"ðŸš§ <yellow>Request Queue Overloaded</yellow> <magenta>|</magenta> <blue>Dropped</blue>: <magenta>%d</magenta> <magenta>|</magenta> <blue>Remote</blue>: <cyan>%v</cyan>",
 		total,
 		addr,
 	)
@@ -890,55 +914,30 @@ func (s *Server) handlePackedPostSessionBlock(vpnPacket VpnProto.Packet, session
 	}
 }
 
-func (s *Server) processDeferredDNSQuery(decision domainMatcher.Decision, vpnPacket VpnProto.Packet, sessionRecord *sessionRuntimeView) {
-	now := time.Now()
-
-	if s.log != nil {
-		s.log.Debugf(
-			"📨 <green>Tunnel DNS Query Received</green> <magenta>|</magenta> <blue>Session</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Seq</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Frag</blue>: <cyan>%d/%d</cyan> <magenta>|</magenta> <blue>Domain</blue>: <cyan>%s</cyan>",
-			vpnPacket.SessionID,
-			vpnPacket.SequenceNum,
-			vpnPacket.FragmentID+1,
-			max(1, int(vpnPacket.TotalFragments)),
-			decision.RequestName,
-		)
-	}
-
-	assembledQuery, ready := s.collectDNSQueryFragments(
-		vpnPacket.SessionID,
-		vpnPacket.SequenceNum,
-		vpnPacket.Payload,
-		vpnPacket.FragmentID,
-		vpnPacket.TotalFragments,
-		now,
-	)
-	if !ready {
-		if s.log != nil {
-			s.log.Debugf(
-				"🧩 <green>Tunnel DNS Fragment Buffered</green> <magenta>|</magenta> <blue>Session</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Seq</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Frag</blue>: <cyan>%d/%d</cyan>",
-				vpnPacket.SessionID,
-				vpnPacket.SequenceNum,
-				vpnPacket.FragmentID+1,
-				max(1, int(vpnPacket.TotalFragments)),
-			)
-		}
+func (s *Server) processDeferredDNSQuery(sessionID uint8, sequenceNum uint16, downloadCompression uint8, downloadMTU uint16, assembledQuery []byte) {
+	if !s.sessions.HasActive(sessionID) {
 		return
 	}
-
-	rawResponse := s.buildDNSQueryResponsePayload(assembledQuery, vpnPacket.SessionID, vpnPacket.SequenceNum)
+	rawResponse := s.buildDNSQueryResponsePayload(assembledQuery, sessionID, sequenceNum)
 	if len(rawResponse) == 0 {
 		return
 	}
-
-	_ = s.queueSessionPacket(vpnPacket.SessionID, VpnProto.Packet{
-		PacketType:      Enums.PACKET_DNS_QUERY_RES,
-		StreamID:        0,
-		SequenceNum:     vpnPacket.SequenceNum,
-		FragmentID:      0,
-		TotalFragments:  1,
-		CompressionType: sessionRecord.DownloadCompression,
-		Payload:         rawResponse,
-	})
+	fragments := s.fragmentDNSResponsePayload(rawResponse, downloadMTU)
+	if len(fragments) == 0 {
+		return
+	}
+	totalFragments := uint8(len(fragments))
+	for fragmentID, fragmentPayload := range fragments {
+		_ = s.queueMainSessionPacket(sessionID, VpnProto.Packet{
+			PacketType:      Enums.PACKET_DNS_QUERY_RES,
+			StreamID:        0,
+			SequenceNum:     sequenceNum,
+			FragmentID:      uint8(fragmentID),
+			TotalFragments:  totalFragments,
+			CompressionType: downloadCompression,
+			Payload:         fragmentPayload,
+		})
+	}
 }
 
 func (s *Server) processDeferredStreamSyn(vpnPacket VpnProto.Packet, sessionRecord *sessionRuntimeView) {
@@ -1044,7 +1043,7 @@ func (s *Server) processDeferredSOCKS5Syn(vpnPacket VpnProto.Packet, sessionReco
 		packetType := s.mapSOCKSConnectError(err)
 		if s.log != nil {
 			s.log.Debugf(
-				"🧦 <yellow>SOCKS5 Upstream Connect Failed</yellow> <magenta>|</magenta> <blue>Session</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Stream</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Target</blue>: <cyan>%s:%d</cyan> <magenta>|</magenta> <blue>Packet</blue>: <yellow>%s</yellow> <magenta>|</magenta> <cyan>%v</cyan>",
+				"ðŸ§¦ <yellow>SOCKS5 Upstream Connect Failed</yellow> <magenta>|</magenta> <blue>Session</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Stream</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Target</blue>: <cyan>%s:%d</cyan> <magenta>|</magenta> <blue>Packet</blue>: <yellow>%s</yellow> <magenta>|</magenta> <cyan>%v</cyan>",
 				vpnPacket.SessionID,
 				vpnPacket.StreamID,
 				target.Host,
@@ -1075,7 +1074,7 @@ func (s *Server) processDeferredSOCKS5Syn(vpnPacket VpnProto.Packet, sessionReco
 
 	if s.log != nil {
 		s.log.Debugf(
-			"🧦 <green>SOCKS5 Stream Prepared</green> <magenta>|</magenta> <blue>Session</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Stream</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Target</blue>: <cyan>%s:%d</cyan>",
+			"ðŸ§¦ <green>SOCKS5 Stream Prepared</green> <magenta>|</magenta> <blue>Session</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Stream</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Target</blue>: <cyan>%s:%d</cyan>",
 			record.SessionID,
 			record.StreamID,
 			record.TargetHost,
@@ -1123,7 +1122,7 @@ func (s *Server) processDeferredStreamData(vpnPacket VpnProto.Packet) {
 		if _, err := streamRecord.UpstreamConn.Write(vpnPacket.Payload); err != nil {
 			if s.log != nil {
 				s.log.Debugf(
-					"📤 <yellow>Upstream Write Failed</yellow> <magenta>|</magenta> <blue>Session</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Stream</blue>: <cyan>%d</cyan> <magenta>|</magenta> <cyan>%v</cyan>",
+					"ðŸ“¤ <yellow>Upstream Write Failed</yellow> <magenta>|</magenta> <blue>Session</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Stream</blue>: <cyan>%d</cyan> <magenta>|</magenta> <cyan>%v</cyan>",
 					vpnPacket.SessionID,
 					vpnPacket.StreamID,
 					err,
@@ -1157,12 +1156,84 @@ func (s *Server) handleDNSQueryRequest(decision domainMatcher.Decision, vpnPacke
 	if sessionRecord == nil || vpnPacket.StreamID != 0 || !vpnPacket.HasSequenceNum {
 		return false
 	}
+	totalFragments := vpnPacket.TotalFragments
+	if totalFragments == 0 {
+		totalFragments = 1
+	}
+	now := time.Now()
+	if s.log != nil {
+		s.log.Debugf(
+			"📨 <green>Tunnel DNS Query Received</green> <magenta>|</magenta> <blue>Session</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Seq</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Frag</blue>: <cyan>%d/%d</cyan> <magenta>|</magenta> <blue>Domain</blue>: <cyan>%s</cyan>",
+			vpnPacket.SessionID,
+			vpnPacket.SequenceNum,
+			vpnPacket.FragmentID+1,
+			max(1, int(totalFragments)),
+			decision.RequestName,
+		)
+	}
+	_ = s.queueMainSessionPacket(vpnPacket.SessionID, VpnProto.Packet{
+		PacketType:     Enums.PACKET_DNS_QUERY_REQ_ACK,
+		StreamID:       0,
+		SequenceNum:    vpnPacket.SequenceNum,
+		FragmentID:     vpnPacket.FragmentID,
+		TotalFragments: totalFragments,
+	})
+
+	assembledQuery, ready, completed := s.collectDNSQueryFragments(
+		vpnPacket.SessionID,
+		vpnPacket.SequenceNum,
+		vpnPacket.Payload,
+		vpnPacket.FragmentID,
+		totalFragments,
+		now,
+	)
+	if completed {
+		return true
+	}
+	if !ready {
+		if s.log != nil {
+			s.log.Debugf(
+				"🧩 <green>Tunnel DNS Fragment Buffered</green> <magenta>|</magenta> <blue>Session</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Seq</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Frag</blue>: <cyan>%d/%d</cyan>",
+				vpnPacket.SessionID,
+				vpnPacket.SequenceNum,
+				vpnPacket.FragmentID+1,
+				max(1, int(totalFragments)),
+			)
+		}
+		return true
+	}
+
 	run := func() {
-		s.processDeferredDNSQuery(decision, vpnPacket, sessionRecord)
+		s.processDeferredDNSQuery(
+			vpnPacket.SessionID,
+			vpnPacket.SequenceNum,
+			sessionRecord.DownloadCompression,
+			sessionRecord.DownloadMTU,
+			assembledQuery,
+		)
 	}
 	if !s.dispatchDeferredSessionPacket(vpnPacket, run) {
 		run()
 	}
+	return true
+}
+
+func (s *Server) handleDNSQueryResponseAck(vpnPacket VpnProto.Packet, sessionRecord *sessionRuntimeView) bool {
+	if sessionRecord == nil || vpnPacket.StreamID != 0 || !vpnPacket.HasSequenceNum {
+		return false
+	}
+	totalFragments := vpnPacket.TotalFragments
+	if totalFragments == 0 {
+		totalFragments = 1
+	}
+	s.streamOutbound.Ack(
+		vpnPacket.SessionID,
+		vpnPacket.PacketType,
+		0,
+		vpnPacket.SequenceNum,
+		vpnPacket.FragmentID,
+		totalFragments,
+	)
 	return true
 }
 
@@ -1310,11 +1381,11 @@ func (s *Server) handleStreamAckPacket(vpnPacket VpnProto.Packet, sessionRecord 
 	switch vpnPacket.PacketType {
 	case Enums.PACKET_STREAM_RST_ACK:
 		_ = s.streams.MarkReset(vpnPacket.SessionID, vpnPacket.StreamID, vpnPacket.SequenceNum, now)
-		s.streamOutbound.Ack(vpnPacket.SessionID, vpnPacket.PacketType, vpnPacket.StreamID, vpnPacket.SequenceNum)
+		s.streamOutbound.Ack(vpnPacket.SessionID, vpnPacket.PacketType, vpnPacket.StreamID, vpnPacket.SequenceNum, 0, 0)
 		s.streamOutbound.ClearStream(vpnPacket.SessionID, vpnPacket.StreamID)
 	case Enums.PACKET_STREAM_DATA_ACK, Enums.PACKET_STREAM_FIN_ACK, Enums.PACKET_STREAM_SYN_ACK:
 		_, _ = s.streams.Touch(vpnPacket.SessionID, vpnPacket.StreamID, vpnPacket.SequenceNum, now)
-		s.streamOutbound.Ack(vpnPacket.SessionID, vpnPacket.PacketType, vpnPacket.StreamID, vpnPacket.SequenceNum)
+		s.streamOutbound.Ack(vpnPacket.SessionID, vpnPacket.PacketType, vpnPacket.StreamID, vpnPacket.SequenceNum, 0, 0)
 	}
 	return true
 }
@@ -1344,7 +1415,7 @@ func (s *Server) expireStalledOutboundStreams(sessionID uint8, now time.Time) {
 		})
 		if log != nil {
 			log.Warnf(
-				"🚧 <yellow>Stream ARQ Retry Budget Exhausted, Session: <cyan>%d</cyan>, Stream: <cyan>%d</cyan></yellow>",
+				"ðŸš§ <yellow>Stream ARQ Retry Budget Exhausted, Session: <cyan>%d</cyan>, Stream: <cyan>%d</cyan></yellow>",
 				sessionID,
 				streamID,
 			)

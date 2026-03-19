@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"time"
 
-	DnsParser "masterdnsvpn-go/internal/dnsparser"
 	Enums "masterdnsvpn-go/internal/enums"
 	VpnProto "masterdnsvpn-go/internal/vpnproto"
 )
@@ -116,8 +115,13 @@ func (c *Client) sendFragmentedStreamPacketWithConnection(connection Connection,
 	if err != nil {
 		return VpnProto.Packet{}, err
 	}
+	deadline := time.Now().Add(timeout)
 
 	for fragmentID, fragmentPayload := range fragments {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return VpnProto.Packet{}, fallbackErr
+		}
 		query, err := c.buildStreamQuery(
 			connection.Domain,
 			packetType,
@@ -131,22 +135,38 @@ func (c *Client) sendFragmentedStreamPacketWithConnection(connection Connection,
 			return VpnProto.Packet{}, err
 		}
 
-		response, err := c.exchangeDNSOverConnection(connection, query, timeout)
+		response, err := c.exchangeDNSOverConnection(connection, query, remaining)
 		if err != nil {
 			return VpnProto.Packet{}, err
 		}
-		if fragmentID < len(fragments)-1 {
-			continue
+
+		packet, err := c.parseValidatedServerPacket(response, fallbackErr)
+		if err != nil {
+			return VpnProto.Packet{}, err
 		}
 
-		packet, err := DnsParser.ExtractVPNResponse(response, c.responseMode == mtuProbeBase64Reply)
-		if err != nil || !c.validateServerPacket(packet) {
-			return VpnProto.Packet{}, fallbackErr
+		if fragmentID < len(fragments)-1 {
+			if err := c.handleAsyncServerPacket(packet, remaining); err != nil {
+				return VpnProto.Packet{}, err
+			}
+			continue
 		}
-		if packet.StreamID != streamID || packet.SequenceNum != sequenceNum {
-			return VpnProto.Packet{}, fallbackErr
+		for {
+			if matchesExpectedStreamResponse(packetType, streamID, sequenceNum, packet) {
+				return packet, nil
+			}
+			if err := c.handleAsyncServerPacket(packet, time.Until(deadline)); err != nil {
+				return VpnProto.Packet{}, err
+			}
+			remaining = time.Until(deadline)
+			if remaining <= 0 {
+				return VpnProto.Packet{}, fallbackErr
+			}
+			packet, err = c.pollServerPacketWithConnection(connection, remaining)
+			if err != nil {
+				return VpnProto.Packet{}, err
+			}
 		}
-		return packet, nil
 	}
 
 	return VpnProto.Packet{}, fallbackErr

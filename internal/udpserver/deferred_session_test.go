@@ -72,11 +72,22 @@ func TestHandlePingRequestServesQueuedOutboundPacket(t *testing.T) {
 		MinVPNLabelLength: 3,
 	}, nil, nil)
 
+	sessionPayload := []byte{
+		0,
+		0,
+		0, 96,
+		0, 96,
+		0x12, 0x34, 0x56, 0x78,
+	}
+	sessionRecord, _, err := srv.sessions.findOrCreate(sessionPayload, 0, 0, 1)
+	if err != nil {
+		t.Fatalf("findOrCreate returned error: %v", err)
+	}
 	record := &sessionRuntimeView{
-		ID:             7,
-		Cookie:         9,
-		ResponseMode:   mtuProbeModeRaw,
-		ResponseBase64: false,
+		ID:             sessionRecord.ID,
+		Cookie:         sessionRecord.Cookie,
+		ResponseMode:   sessionRecord.ResponseMode,
+		ResponseBase64: sessionRecord.ResponseMode == mtuProbeModeBase64,
 	}
 
 	if !srv.queueSessionPacket(record.ID, VpnProto.Packet{

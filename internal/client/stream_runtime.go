@@ -131,6 +131,13 @@ func (c *Client) handleFollowUpServerPacket(packet VpnProto.Packet, timeout time
 		switch current.PacketType {
 		case 0, Enums.PACKET_PONG, Enums.PACKET_STREAM_DATA_ACK, Enums.PACKET_STREAM_FIN_ACK, Enums.PACKET_STREAM_RST_ACK, Enums.PACKET_STREAM_SYN_ACK, Enums.PACKET_SOCKS5_SYN_ACK:
 			return nil
+		case Enums.PACKET_DNS_QUERY_REQ_ACK:
+			if c.stream0Runtime != nil {
+				c.stream0Runtime.ackDNSRequestFragment(current)
+			}
+			return nil
+		case Enums.PACKET_DNS_QUERY_RES:
+			return c.handleInboundDNSResponseFragment(current)
 		case Enums.PACKET_PACKED_CONTROL_BLOCKS:
 			return c.handlePackedServerControlBlocks(current.Payload, timeout)
 		case Enums.PACKET_STREAM_DATA, Enums.PACKET_STREAM_FIN, Enums.PACKET_STREAM_RST:

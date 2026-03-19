@@ -30,8 +30,6 @@ func (c *Client) RunLocalDNSListener(ctx context.Context) error {
 		return err
 	}
 
-	c.loadLocalDNSCache()
-
 	conn, err := net.ListenUDP("udp", &net.UDPAddr{
 		IP:   net.ParseIP(c.cfg.LocalDNSIP),
 		Port: c.cfg.LocalDNSPort,
@@ -68,8 +66,6 @@ func (c *Client) RunLocalDNSListener(ctx context.Context) error {
 		<-ctx.Done()
 		_ = conn.Close()
 	}()
-	go c.runLocalDNSCacheFlushLoop(ctx)
-
 	for {
 		buffer := packetPool.Get().([]byte)
 		n, addr, err := conn.ReadFromUDP(buffer)
@@ -106,6 +102,7 @@ func (c *Client) startStream0Runtime(ctx context.Context) error {
 	if c == nil || c.stream0Runtime == nil {
 		return nil
 	}
+	c.ensureLocalDNSCachePersistence(ctx)
 	if err := c.stream0Runtime.Start(ctx); err != nil {
 		return err
 	}

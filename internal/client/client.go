@@ -20,6 +20,7 @@ import (
 	"masterdnsvpn-go/internal/compression"
 	"masterdnsvpn-go/internal/config"
 	"masterdnsvpn-go/internal/dnscache"
+	"masterdnsvpn-go/internal/fragmentstore"
 	"masterdnsvpn-go/internal/logger"
 	"masterdnsvpn-go/internal/security"
 )
@@ -31,10 +32,13 @@ type Client struct {
 	balancer *Balancer
 	now      func() time.Time
 
-	connections      []Connection
-	connectionsByKey map[string]int
-	localDNSCache    *dnscache.Store
-	dnsInflight      *dnsInflightManager
+	connections            []Connection
+	connectionsByKey       map[string]int
+	localDNSCache          *dnscache.Store
+	dnsResponses           *fragmentstore.Store[clientDNSFragmentKey]
+	localDNSFragTTL        time.Duration
+	localDNSCacheLoadOnce  sync.Once
+	localDNSCacheFlushOnce sync.Once
 
 	successMTUChecks    bool
 	sessionReady        bool
@@ -129,6 +133,7 @@ func Bootstrap(configPath string) (*Client, error) {
 
 	c := New(cfg, log, codec)
 	c.BuildConnectionMap()
+	c.ensureLocalDNSCacheLoaded()
 	return c, nil
 }
 
@@ -145,9 +150,8 @@ func New(cfg config.ClientConfig, log *logger.Logger, codec *security.Codec) *Cl
 			time.Duration(cfg.LocalDNSCacheTTLSeconds*float64(time.Second)),
 			time.Duration(cfg.LocalDNSPendingTimeoutSec*float64(time.Second)),
 		),
-		dnsInflight: newDNSInflightManager(
-			time.Duration(cfg.LocalDNSPendingTimeoutSec * float64(time.Second)),
-		),
+		dnsResponses:       fragmentstore.New[clientDNSFragmentKey](32),
+		localDNSFragTTL:    time.Duration(cfg.LocalDNSFragmentTimeoutSec * float64(time.Second)),
 		streams:            make(map[uint16]*clientStream, 16),
 		streamTXWindow:     cfg.StreamTXWindow,
 		streamTXQueueLimit: cfg.StreamTXQueueLimit,
@@ -156,6 +160,9 @@ func New(cfg config.ClientConfig, log *logger.Logger, codec *security.Codec) *Cl
 		resolverHealth:     make(map[string]*resolverHealthState, len(cfg.Domains)*len(cfg.Resolvers)),
 		resolverRecheck:    make(map[string]resolverRecheckState, len(cfg.Domains)*len(cfg.Resolvers)),
 		runtimeDisabled:    make(map[string]resolverDisabledState, len(cfg.Domains)*len(cfg.Resolvers)),
+	}
+	if c.localDNSFragTTL <= 0 {
+		c.localDNSFragTTL = 5 * time.Minute
 	}
 	c.ResetRuntimeState(true)
 	c.uploadCompression = uint8(cfg.UploadCompressionType)
@@ -232,6 +239,7 @@ func (c *Client) ResetRuntimeState(resetSessionCookie bool) {
 	c.responseMode = 0
 	c.maxPackedBlocks = 1
 	c.fragmentLimits = sync.Map{}
+	c.dnsResponses = fragmentstore.New[clientDNSFragmentKey](32)
 	c.streamsMu.Lock()
 	c.streams = make(map[uint16]*clientStream, 16)
 	c.streamsMu.Unlock()

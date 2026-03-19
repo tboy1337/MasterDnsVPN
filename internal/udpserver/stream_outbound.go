@@ -197,25 +197,36 @@ func (s *streamOutboundStore) ExpireStalled(sessionID uint8, now time.Time, maxR
 	ttlDeadline := now.Add(-ttl)
 	expired := make([]uint16, 0, 2)
 	var expiredSet map[uint16]struct{}
+	mainExpired := false
 	for _, pending := range session.pending {
 		if pending.RetryCount < maxRetries && pending.CreatedAt.After(ttlDeadline) {
 			continue
 		}
+		if pending.Packet.StreamID == 0 {
+			mainExpired = true
+			continue
+		}
 		expired, expiredSet = appendUniqueExpiredStream(expired, expiredSet, pending.Packet.StreamID)
 	}
-	if len(expired) == 0 {
+	if len(expired) == 0 && !mainExpired {
 		return nil
 	}
 
-	if len(expired) == 1 {
+	if mainExpired || len(expired) > 1 {
+		if len(expired) != 0 && expiredSet == nil {
+			expiredSet = make(map[uint16]struct{}, len(expired))
+			for _, streamID := range expired {
+				expiredSet[streamID] = struct{}{}
+			}
+		}
+		pruneExpiredPendingPackets(session, ttlDeadline, maxRetries, expiredSet)
+	} else if len(expired) == 1 {
 		streamID := expired[0]
 		prunePendingStreamPackets(session, streamID)
 		session.scheduler.HandleStreamReset(streamID)
-	} else {
-		prunePendingStreamPacketSet(session, expired)
-		for _, streamID := range expired {
-			session.scheduler.HandleStreamReset(streamID)
-		}
+	}
+	for _, streamID := range expired {
+		session.scheduler.HandleStreamReset(streamID)
 	}
 	if session.scheduler.Pending() == 0 && len(session.pending) == 0 {
 		delete(s.sessions, sessionID)
@@ -223,7 +234,7 @@ func (s *streamOutboundStore) ExpireStalled(sessionID uint8, now time.Time, maxR
 	return expired
 }
 
-func (s *streamOutboundStore) Ack(sessionID uint8, packetType uint8, streamID uint16, sequenceNum uint16) bool {
+func (s *streamOutboundStore) Ack(sessionID uint8, packetType uint8, streamID uint16, sequenceNum uint16, fragmentID uint8, totalFragments uint8) bool {
 	if s == nil || sessionID == 0 {
 		return false
 	}
@@ -242,6 +253,14 @@ func (s *streamOutboundStore) Ack(sessionID uint8, packetType uint8, streamID ui
 		}
 		if pending.Packet.StreamID != streamID || pending.Packet.SequenceNum != sequenceNum {
 			continue
+		}
+		if pending.Packet.PacketType == Enums.PACKET_DNS_QUERY_RES {
+			if totalFragments == 0 {
+				totalFragments = 1
+			}
+			if pending.Packet.FragmentID != fragmentID || pending.Packet.TotalFragments != totalFragments {
+				continue
+			}
 		}
 		updateStreamOutboundRTO(session, pending, ackedAt)
 		copy(session.pending[idx:], session.pending[idx+1:])
@@ -365,6 +384,32 @@ func prunePendingStreamPacketSet(session *streamOutboundSession, streamIDs []uin
 	session.pending = session.pending[:writeIdx]
 }
 
+func pruneExpiredPendingPackets(session *streamOutboundSession, ttlDeadline time.Time, maxRetries int, expiredStreams map[uint16]struct{}) {
+	if session == nil || len(session.pending) == 0 {
+		return
+	}
+	writeIdx := 0
+	for _, pending := range session.pending {
+		if pending.Packet.StreamID != 0 && expiredStreams != nil {
+			if _, drop := expiredStreams[pending.Packet.StreamID]; drop {
+				continue
+			}
+		}
+		expired := pending.RetryCount >= maxRetries || !pending.CreatedAt.After(ttlDeadline)
+		if expired {
+			if pending.Packet.StreamID == 0 {
+				continue
+			}
+		}
+		session.pending[writeIdx] = pending
+		writeIdx++
+	}
+	for idx := writeIdx; idx < len(session.pending); idx++ {
+		session.pending[idx] = outboundPendingPacket{}
+	}
+	session.pending = session.pending[:writeIdx]
+}
+
 func appendUniqueExpiredStream(dst []uint16, set map[uint16]struct{}, streamID uint16) ([]uint16, map[uint16]struct{}) {
 	if streamID == 0 {
 		return dst, set
@@ -416,6 +461,7 @@ func buildStreamOutboundAckTypeByPending() [256]uint8 {
 	values[Enums.PACKET_STREAM_DATA] = Enums.PACKET_STREAM_DATA_ACK
 	values[Enums.PACKET_STREAM_FIN] = Enums.PACKET_STREAM_FIN_ACK
 	values[Enums.PACKET_STREAM_RST] = Enums.PACKET_STREAM_RST_ACK
+	values[Enums.PACKET_DNS_QUERY_RES] = Enums.PACKET_DNS_QUERY_RES_ACK
 	return values
 }
 
@@ -424,6 +470,7 @@ func buildStreamOutboundAckRequired() [256]bool {
 	values[Enums.PACKET_STREAM_DATA] = true
 	values[Enums.PACKET_STREAM_FIN] = true
 	values[Enums.PACKET_STREAM_RST] = true
+	values[Enums.PACKET_DNS_QUERY_RES] = true
 	return values
 }
 

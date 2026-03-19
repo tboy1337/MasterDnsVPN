@@ -25,13 +25,6 @@ type dnsFragmentKey struct {
 	sequenceNum uint16
 }
 
-type dnsFragmentEntry struct {
-	createdAt      time.Time
-	totalFragments uint8
-	chunks         [256][]byte
-	count          uint8
-}
-
 func (s *Server) buildDNSQueryResponsePayload(rawQuery []byte, sessionID uint8, sequenceNum uint16) []byte {
 	parsed, err := DnsParser.ParseDNSRequestLite(rawQuery)
 	if err != nil {
@@ -153,71 +146,66 @@ func (s *Server) buildDNSQueryResponsePayload(rawQuery []byte, sessionID uint8, 
 	return resolved
 }
 
-func (s *Server) collectDNSQueryFragments(sessionID uint8, sequenceNum uint16, payload []byte, fragmentID uint8, totalFragments uint8, now time.Time) ([]byte, bool) {
-	if totalFragments <= 1 {
-		return payload, true
+func (s *Server) collectDNSQueryFragments(sessionID uint8, sequenceNum uint16, payload []byte, fragmentID uint8, totalFragments uint8, now time.Time) ([]byte, bool, bool) {
+	if totalFragments == 0 {
+		totalFragments = 1
 	}
-	if totalFragments == 0 || fragmentID >= totalFragments {
-		return nil, false
-	}
-
-	s.dnsFragmentMu.Lock()
-	defer s.dnsFragmentMu.Unlock()
-
-	s.purgeDNSQueryFragmentsLocked(now)
-
-	key := dnsFragmentKey{sessionID: sessionID, sequenceNum: sequenceNum}
-	entry, ok := s.dnsFragments[key]
-	if !ok || entry.totalFragments != totalFragments {
-		entry = &dnsFragmentEntry{
-			createdAt:      now,
-			totalFragments: totalFragments,
-		}
-		s.dnsFragments[key] = entry
-	}
-
-	if entry.chunks[fragmentID] == nil {
-		entry.count++
-	}
-	entry.chunks[fragmentID] = append(entry.chunks[fragmentID][:0], payload...)
-
-	if entry.count < totalFragments {
-		return nil, false
-	}
-
-	totalSize := 0
-	for i := uint8(0); i < totalFragments; i++ {
-		chunk := entry.chunks[i]
-		if chunk == nil {
-			return nil, false
-		}
-		totalSize += len(chunk)
-	}
-
-	assembled := make([]byte, 0, totalSize)
-	for i := uint8(0); i < totalFragments; i++ {
-		assembled = append(assembled, entry.chunks[i]...)
-	}
-	delete(s.dnsFragments, key)
-	return assembled, true
+	assembled, ready, completed := s.dnsFragments.Collect(
+		dnsFragmentKey{
+			sessionID:   sessionID,
+			sequenceNum: sequenceNum,
+		},
+		payload,
+		fragmentID,
+		totalFragments,
+		now,
+		s.dnsFragmentTimeout,
+	)
+	return assembled, ready, completed
 }
 
 func (s *Server) purgeDNSQueryFragments(now time.Time) {
-	s.dnsFragmentMu.Lock()
-	s.purgeDNSQueryFragmentsLocked(now)
-	s.dnsFragmentMu.Unlock()
+	if s == nil || s.dnsFragments == nil {
+		return
+	}
+	s.dnsFragments.Purge(now, s.dnsFragmentTimeout)
 }
 
-func (s *Server) purgeDNSQueryFragmentsLocked(now time.Time) {
-	timeout := s.cfg.DNSFragmentAssemblyTimeout()
-	if timeout <= 0 {
-		timeout = 16 * time.Second
+func (s *Server) removeDNSQueryFragmentsForSession(sessionID uint8) {
+	if s == nil || s.dnsFragments == nil || sessionID == 0 {
+		return
 	}
-	for key, entry := range s.dnsFragments {
-		if now.Sub(entry.createdAt) >= timeout {
-			delete(s.dnsFragments, key)
+	s.dnsFragments.RemoveIf(func(key dnsFragmentKey) bool {
+		return key.sessionID == sessionID
+	})
+}
+
+func (s *Server) fragmentDNSResponsePayload(response []byte, mtu uint16) [][]byte {
+	if len(response) == 0 {
+		return nil
+	}
+	limit := int(mtu)
+	if limit < 1 {
+		limit = 256
+	}
+	if len(response) <= limit {
+		return [][]byte{response}
+	}
+
+	total := (len(response) + limit - 1) / limit
+	if total > 255 {
+		return nil
+	}
+
+	fragments := make([][]byte, 0, total)
+	for start := 0; start < len(response); start += limit {
+		end := start + limit
+		if end > len(response) {
+			end = len(response)
 		}
+		fragments = append(fragments, response[start:end])
 	}
+	return fragments
 }
 
 func (s *Server) resolveDNSUpstream(rawQuery []byte) ([]byte, error) {

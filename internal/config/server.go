@@ -88,7 +88,7 @@ func defaultServerConfig() ServerConfig {
 		DNSUpstreamServers:                []string{"1.1.1.1:53"},
 		DNSUpstreamTimeoutSecs:            4.0,
 		SOCKSConnectTimeoutSecs:           8.0,
-		DNSFragmentAssemblyTimeoutSecs:    16.0,
+		DNSFragmentAssemblyTimeoutSecs:    300.0,
 		DNSCacheMaxRecords:                2000,
 		DNSCacheTTLSeconds:                3600.0,
 		ForwardIP:                         "",
@@ -213,7 +213,7 @@ func LoadServerConfig(filename string) (ServerConfig, error) {
 		cfg.SOCKSConnectTimeoutSecs = 8.0
 	}
 	if cfg.DNSFragmentAssemblyTimeoutSecs <= 0 {
-		cfg.DNSFragmentAssemblyTimeoutSecs = max(10.0, cfg.DNSUpstreamTimeoutSecs*4.0)
+		cfg.DNSFragmentAssemblyTimeoutSecs = 300.0
 	}
 	if cfg.DNSCacheMaxRecords < 1 {
 		cfg.DNSCacheMaxRecords = 2000
