@@ -331,16 +331,15 @@ func (s *Server) handlePacket(packet []byte) []byte {
 	}
 
 	decision := s.domainMatcher.Match(parsed)
-	switch decision.Action {
-	case domainMatcher.ActionProcess:
+	if decision.Action == domainMatcher.ActionProcess {
 		return s.handleTunnelCandidate(packet, parsed, decision)
-	case domainMatcher.ActionFormatError:
-		return buildNoDataResponseLite(packet, parsed)
-	case domainMatcher.ActionNoData:
-		return buildNoDataResponseLite(packet, parsed)
-	default:
-		return nil
 	}
+
+	if decision.Action == domainMatcher.ActionFormatError || decision.Action == domainMatcher.ActionNoData {
+		return buildNoDataResponseLite(packet, parsed)
+	}
+
+	return nil
 }
 
 func (s *Server) handleTunnelCandidate(packet []byte, parsed DnsParser.LitePacket, decision domainMatcher.Decision) []byte {

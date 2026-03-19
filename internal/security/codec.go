@@ -104,6 +104,9 @@ func (c *Codec) EncryptAndEncodeLowerBase36(data []byte) (string, error) {
 	if c == nil {
 		return "", ErrInvalidCodecMethod
 	}
+	if c.method == 0 {
+		return baseCodec.EncodeLowerBase36(data), nil
+	}
 
 	encrypted, err := c.encrypt(data)
 	if err != nil {
@@ -121,6 +124,9 @@ func (c *Codec) DecodeLowerBase36AndDecrypt(data []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	if c.method == 0 {
+		return decoded, nil
+	}
 	return c.decrypt(decoded)
 }
 
@@ -132,6 +138,9 @@ func (c *Codec) DecodeLowerBase36StringAndDecrypt(data string) ([]byte, error) {
 	decoded, err := baseCodec.DecodeLowerBase36String(data)
 	if err != nil {
 		return nil, err
+	}
+	if c.method == 0 {
+		return decoded, nil
 	}
 	return c.decrypt(decoded)
 }
