@@ -273,6 +273,7 @@ func (c *Client) disableResolverConnection(serverKey string, cause string) bool 
 			cause,
 		)
 	}
+	c.appendMTURemovedServerLine(conn, cause)
 	return true
 }
 
@@ -301,6 +302,7 @@ func (c *Client) reactivateResolverConnection(serverKey string) bool {
 			conn.ResolverLabel,
 		)
 	}
+	c.appendMTUAddedServerLine(conn)
 	return true
 }
 
@@ -486,16 +488,17 @@ func (c *Client) recheckResolverConnection(conn *Connection) bool {
 	}
 	defer transport.conn.Close()
 
-	upOK, err := c.sendUploadMTUProbe(conn, transport, c.syncedUploadMTU)
+	upOK, err := c.sendUploadMTUProbe(conn, transport, c.syncedUploadMTU, mtuProbeOptions{Quiet: true})
 	if err != nil || !upOK {
 		return false
 	}
-	downOK, err := c.sendDownloadMTUProbe(conn, transport, c.syncedDownloadMTU, c.syncedUploadMTU)
+	downOK, err := c.sendDownloadMTUProbe(conn, transport, c.syncedDownloadMTU, c.syncedUploadMTU, mtuProbeOptions{Quiet: true})
 	if err != nil || !downOK {
 		return false
 	}
 
 	conn.UploadMTUBytes = c.syncedUploadMTU
+	conn.UploadMTUChars = c.encodedCharsForPayload(c.syncedUploadMTU)
 	conn.DownloadMTUBytes = c.syncedDownloadMTU
 	return true
 }

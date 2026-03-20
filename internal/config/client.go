@@ -71,6 +71,12 @@ type ClientConfig struct {
 	MTUTestRetries             int               `toml:"MTU_TEST_RETRIES"`
 	MTUTestTimeout             float64           `toml:"MTU_TEST_TIMEOUT"`
 	MTUTestParallelism         int               `toml:"MTU_TEST_PARALLELISM"`
+	SaveMTUServersToFile       bool              `toml:"SAVE_MTU_SERVERS_TO_FILE"`
+	MTUServersFileName         string            `toml:"MTU_SERVERS_FILE_NAME"`
+	MTUServersFileFormat       string            `toml:"MTU_SERVERS_FILE_FORMAT"`
+	MTUUsingSeparatorText      string            `toml:"MTU_USING_SECTION_SEPARATOR_TEXT"`
+	MTURemovedServerLogFormat  string            `toml:"MTU_REMOVED_SERVER_LOG_FORMAT"`
+	MTUAddedServerLogFormat    string            `toml:"MTU_ADDED_SERVER_LOG_FORMAT"`
 	LogLevel                   string            `toml:"LOG_LEVEL"`
 	Resolvers                  []ResolverAddress `toml:"-"`
 	ResolverMap                map[string]int    `toml:"-"`
@@ -127,6 +133,12 @@ func defaultClientConfig() ClientConfig {
 		MTUTestRetries:             2,
 		MTUTestTimeout:             2.0,
 		MTUTestParallelism:         6,
+		SaveMTUServersToFile:       false,
+		MTUServersFileName:         "masterdnsvpn_success_test_{time}.log",
+		MTUServersFileFormat:       "{IP} - UP: {UP_MTU} DOWN: {DOWN-MTU}",
+		MTUUsingSeparatorText:      "",
+		MTURemovedServerLogFormat:  "",
+		MTUAddedServerLogFormat:    "",
 		LogLevel:                   "INFO",
 	}
 }
@@ -257,6 +269,11 @@ func LoadClientConfig(filename string) (ClientConfig, error) {
 	cfg.MTUTestRetries = defaultIntBelow(cfg.MTUTestRetries, 1, 1)
 	cfg.MTUTestTimeout = defaultFloatAtMostZero(cfg.MTUTestTimeout, 1.0)
 	cfg.MTUTestParallelism = defaultIntBelow(cfg.MTUTestParallelism, 1, 1)
+	cfg.MTUServersFileName = strings.TrimSpace(cfg.MTUServersFileName)
+	cfg.MTUServersFileFormat = strings.TrimSpace(cfg.MTUServersFileFormat)
+	cfg.MTUUsingSeparatorText = strings.TrimSpace(cfg.MTUUsingSeparatorText)
+	cfg.MTURemovedServerLogFormat = strings.TrimSpace(cfg.MTURemovedServerLogFormat)
+	cfg.MTUAddedServerLogFormat = strings.TrimSpace(cfg.MTUAddedServerLogFormat)
 
 	cfg.EncryptionKey = strings.TrimSpace(cfg.EncryptionKey)
 	if cfg.EncryptionKey == "" {

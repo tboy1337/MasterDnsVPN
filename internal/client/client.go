@@ -43,20 +43,31 @@ type Client struct {
 	localDNSCacheLoadOnce  sync.Once
 	localDNSCacheFlushOnce sync.Once
 
-	successMTUChecks    bool
-	sessionReady        bool
-	sessionID           uint8
-	sessionCookie       uint8
-	responseMode        uint8
-	uploadCompression   uint8
-	downloadCompression uint8
-	enqueueSeq          uint64
-	mainSequence        uint16
-	lastStreamID        uint16
-	syncedUploadMTU     int
-	syncedDownloadMTU   int
-	syncedUploadChars   int
-	maxPackedBlocks     int
+	successMTUChecks          bool
+	sessionReady              bool
+	sessionID                 uint8
+	sessionCookie             uint8
+	responseMode              uint8
+	uploadCompression         uint8
+	downloadCompression       uint8
+	enqueueSeq                uint64
+	mainSequence              uint16
+	lastStreamID              uint16
+	syncedUploadMTU           int
+	syncedDownloadMTU         int
+	syncedUploadChars         int
+	safeUploadMTU             int
+	maxPackedBlocks           int
+	mtuCryptoOverhead         int
+	mtuSuccessOutputPath      string
+	mtuUsageSeparatorWritten  bool
+	mtuSaveToFile             bool
+	mtuServersFileName        string
+	mtuServersFileFormat      string
+	mtuUsingSeparatorText     string
+	mtuRemovedServerLogFormat string
+	mtuAddedServerLogFormat   string
+	mtuOutputMu               sync.Mutex
 
 	exchangeQueryFn     func(Connection, []byte, time.Duration) ([]byte, error)
 	fragmentLimits      sync.Map
@@ -85,6 +96,7 @@ type Connection struct {
 	Key              string
 	IsValid          bool
 	UploadMTUBytes   int
+	UploadMTUChars   int
 	DownloadMTUBytes int
 }
 
@@ -165,6 +177,21 @@ func New(cfg config.ClientConfig, log *logger.Logger, codec *security.Codec) *Cl
 		streams:            make(map[uint16]*clientStream, 16),
 		mtuTestRetries:     cfg.MTUTestRetries,
 		mtuTestTimeout:     time.Duration(cfg.MTUTestTimeout * float64(time.Second)),
+		mtuCryptoOverhead:  mtuCryptoOverhead(cfg.DataEncryptionMethod),
+		mtuSaveToFile:      cfg.SaveMTUServersToFile,
+		mtuServersFileName: strings.TrimSpace(cfg.MTUServersFileName),
+		mtuServersFileFormat: strings.TrimSpace(
+			cfg.MTUServersFileFormat,
+		),
+		mtuUsingSeparatorText: strings.TrimSpace(
+			cfg.MTUUsingSeparatorText,
+		),
+		mtuRemovedServerLogFormat: strings.TrimSpace(
+			cfg.MTURemovedServerLogFormat,
+		),
+		mtuAddedServerLogFormat: strings.TrimSpace(
+			cfg.MTUAddedServerLogFormat,
+		),
 		streamTXWindow:     cfg.StreamTXWindow,
 		streamTXQueueLimit: cfg.StreamTXQueueLimit,
 		streamTXMaxRetries: cfg.StreamTXMaxRetries,
@@ -234,6 +261,16 @@ func (c *Client) SyncedUploadChars() int {
 	return c.syncedUploadChars
 }
 
+func (c *Client) SafeUploadMTU() int {
+	if c == nil {
+		return 0
+	}
+	if c.safeUploadMTU > 0 {
+		return c.safeUploadMTU
+	}
+	return c.syncedUploadMTU
+}
+
 func (c *Client) SessionID() uint8 {
 	return c.sessionID
 }
@@ -285,6 +322,18 @@ func (c *Client) updateMaxPackedBlocks() {
 	if c.stream0Runtime != nil {
 		c.stream0Runtime.SetMaxPackedBlocks(c.maxPackedBlocks)
 	}
+}
+
+func (c *Client) applySyncedMTUState(uploadMTU int, downloadMTU int, uploadChars int) {
+	if c == nil {
+		return
+	}
+	c.successMTUChecks = uploadMTU > 0 && downloadMTU > 0
+	c.syncedUploadMTU = uploadMTU
+	c.syncedDownloadMTU = downloadMTU
+	c.syncedUploadChars = uploadChars
+	c.safeUploadMTU = computeSafeUploadMTU(uploadMTU, c.mtuCryptoOverhead)
+	c.updateMaxPackedBlocks()
 }
 
 func (c *Client) applySessionCompressionPolicy() {

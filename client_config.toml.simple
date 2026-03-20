@@ -120,6 +120,31 @@ MTU_TEST_RETRIES = 2
 MTU_TEST_TIMEOUT = 2.0
 MTU_TEST_PARALLELISM = 6
 
+# If true, successful MTU-tested resolvers are saved to file.
+SAVE_MTU_SERVERS_TO_FILE = false
+
+# Output file name.
+# If {time} is present, timestamp is inserted into filename.
+MTU_SERVERS_FILE_NAME = "masterdnsvpn_success_test_{time}.txt"
+
+# Per-line format for each successful resolver.
+# Supported placeholders:
+# {IP}, {UP_MTU}, {DOWN_MTU}, {DOWN-MTU}, {DOMAIN}, {UP_MTU_CHARS}, {TIME}
+MTU_SERVERS_FILE_FORMAT = "{IP} - UP: {UP_MTU} DOWN: {DOWN-MTU}"
+
+# Optional text appended once after initial MTU scan is finished.
+MTU_USING_SECTION_SEPARATOR_TEXT = "---- Active MTU Testing Results ----"
+
+# Optional runtime log line written to the MTU output file when a server is auto-disabled.
+# Supported placeholders:
+# {IP}, {DOMAIN}, {CAUSE}, {TIME}, {UP_MTU}, {DOWN_MTU}
+MTU_REMOVED_SERVER_LOG_FORMAT = "IP {IP} removed from list at {TIME} due to {CAUSE}"
+
+# Optional runtime log line written to the MTU output file when a server is re-added.
+# Supported placeholders:
+# {IP}, {DOMAIN}, {TIME}, {UP_MTU}, {DOWN_MTU}
+MTU_ADDED_SERVER_LOG_FORMAT = "Server {IP} re-added at {TIME} (UP MTU: {UP_MTU}, DOWN MTU: {DOWN_MTU})"
+
 # ------------------------------------------------------------------------------
 # 9) Logging
 # ------------------------------------------------------------------------------

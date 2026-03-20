@@ -264,7 +264,7 @@ func (c *Client) maxMainStreamFragmentPayload(domain string, packetType uint8) i
 		return cached.(int)
 	}
 
-	high := c.syncedUploadMTU
+	high := c.SafeUploadMTU()
 	if high <= 0 {
 		high = EDnsSafeUDPSize
 	}
@@ -289,9 +289,6 @@ func (c *Client) canBuildMainStreamPayload(domain string, packetType uint8, payl
 		return false
 	}
 	payload := make([]byte, payloadLen)
-	for i := range payload {
-		payload[i] = 0xAB
-	}
 	_, err := c.buildStreamQuery(domain, packetType, 0, 1, 0, 1, payload)
 	return err == nil
 }
