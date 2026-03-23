@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -925,43 +926,78 @@ func (s *Server) dequeueSessionResponse(sessionID uint8, now time.Time) (*VpnPro
 	record.mu.Lock()
 	defer record.mu.Unlock()
 
-	if pkt, ok := record.dequeueOrphanReset(); ok && pkt != nil {
-		return pkt, true
+	record.StreamsMu.RLock()
+	streamCount := len(record.ActiveStreams)
+	ids := make([]int32, 0, streamCount+1)
+	for _, id := range record.ActiveStreams {
+		ids = append(ids, int32(id))
+	}
+	record.StreamsMu.RUnlock()
+
+	if record.OrphanQueue != nil && record.OrphanQueue.Size() > 0 {
+		ids = append(ids, -1)
 	}
 
-	// Round-Robin through ActiveStreams (includes Stream 0 which replaces MainQueue)
-	if len(record.ActiveStreams) == 0 {
+	if len(ids) == 0 {
 		return nil, false
 	}
 
-	record.StreamsMu.RLock()
-	defer record.StreamsMu.RUnlock()
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 
-	// Pure Round-Robin logic: start from RRStreamID
 	startIdx := 0
-	for i, id := range record.ActiveStreams {
+	for i, id := range ids {
 		if id >= record.RRStreamID {
 			startIdx = i
 			break
 		}
 	}
 
-	for i := 0; i < len(record.ActiveStreams); i++ {
-		idx := (startIdx + i) % len(record.ActiveStreams)
-		streamID := record.ActiveStreams[idx]
-		stream := record.Streams[streamID]
-		if stream == nil || stream.TXQueue == nil {
-			continue
+	for i := 0; i < len(ids); i++ {
+		idx := (startIdx + i) % len(ids)
+		id := ids[idx]
+
+		var item *serverStreamTXPacket
+		var ok bool
+		var selectedStreamID uint16
+
+		if id == -1 {
+			p, _, popOk := record.OrphanQueue.Pop(func(p VpnProto.Packet) uint64 {
+				return Enums.PacketTypeStreamKey(p.StreamID, p.PacketType)
+			})
+			if popOk {
+				item = &serverStreamTXPacket{
+					PacketType:     p.PacketType,
+					SequenceNum:    p.SequenceNum,
+					FragmentID:     p.FragmentID,
+					TotalFragments: p.TotalFragments,
+					Payload:        p.Payload,
+				}
+				selectedStreamID = p.StreamID
+				ok = true
+			}
+		} else {
+			record.StreamsMu.RLock()
+			stream := record.Streams[uint16(id)]
+			record.StreamsMu.RUnlock()
+			if stream == nil || stream.TXQueue == nil {
+				continue
+			}
+			var popped *serverStreamTXPacket
+			popped, _, ok = stream.TXQueue.Pop(func(p *serverStreamTXPacket) uint64 {
+				return Enums.PacketIdentityKey(uint16(id), p.PacketType, p.SequenceNum, p.FragmentID)
+			})
+			if ok {
+				item = popped
+				selectedStreamID = uint16(id)
+			}
 		}
 
-		if item, _, ok := stream.TXQueue.Pop(func(p *serverStreamTXPacket) uint64 {
-			return Enums.PacketIdentityKey(streamID, p.PacketType, p.SequenceNum, p.FragmentID)
-		}); ok {
-			record.RRStreamID = streamID + 1 // Move to next for next call
+		if ok && item != nil {
+			record.RRStreamID = id + 1 // Move to next for next call
 			if VpnProto.IsPackableControlPacket(item.PacketType, len(item.Payload)) && record.MaxPackedBlocks > 1 {
-				return s.packControlBlocks(record, item, streamID), true
+				return s.packControlBlocks(record, item, id, selectedStreamID), true
 			}
-			pkt := vpnPacketFromTX(item, streamID)
+			pkt := vpnPacketFromTX(item, selectedStreamID)
 			return &pkt, true
 		}
 	}
@@ -969,7 +1005,7 @@ func (s *Server) dequeueSessionResponse(sessionID uint8, now time.Time) (*VpnPro
 	return nil, false
 }
 
-func (s *Server) packControlBlocks(record *sessionRecord, first *serverStreamTXPacket, initialStreamID uint16) *VpnProto.Packet {
+func (s *Server) packControlBlocks(record *sessionRecord, first *serverStreamTXPacket, initialID int32, initialStreamID uint16) *VpnProto.Packet {
 	limit := record.MaxPackedBlocks
 	if limit <= 1 {
 		pkt := vpnPacketFromTX(first, initialStreamID)
@@ -977,41 +1013,66 @@ func (s *Server) packControlBlocks(record *sessionRecord, first *serverStreamTXP
 	}
 
 	payload := make([]byte, 0, limit*VpnProto.PackedControlBlockSize)
-	payload = VpnProto.AppendPackedControlBlock(payload, first.PacketType, initialStreamID, first.SequenceNum, 0, 0)
+	payload = VpnProto.AppendPackedControlBlock(payload, first.PacketType, initialStreamID, first.SequenceNum, first.FragmentID, first.TotalFragments)
 	blocks := 1
 
-	// Cross-stream packing (Any priority)
-	// Start with the initial stream first to grab more blocks from it
-	streamIDs := make([]uint16, 0, len(record.ActiveStreams))
-	streamIDs = append(streamIDs, initialStreamID)
+	// Get all candidate IDs (Orphans + Active Streams)
+	record.StreamsMu.RLock()
+	ids := make([]int32, 0, len(record.ActiveStreams)+1)
+	if record.OrphanQueue != nil && record.OrphanQueue.Size() > 0 {
+		ids = append(ids, -1)
+	}
 	for _, sid := range record.ActiveStreams {
-		if sid != initialStreamID {
-			streamIDs = append(streamIDs, sid)
+		ids = append(ids, int32(sid))
+	}
+	record.StreamsMu.RUnlock()
+
+	// Reorder IDs to prioritize initial stream/source
+	orderedIDs := make([]int32, 0, len(ids))
+	orderedIDs = append(orderedIDs, initialID)
+	for _, id := range ids {
+		if id != initialID {
+			orderedIDs = append(orderedIDs, id)
 		}
 	}
 
-	for _, streamID := range streamIDs {
+	for _, id := range orderedIDs {
 		if blocks >= limit {
 			break
 		}
-		stream := record.Streams[streamID]
-		if stream == nil {
-			continue
-		}
 
-		for blocks < limit {
-			popped, ok := stream.TXQueue.PopAnyIf(func(p *serverStreamTXPacket) bool {
-				return VpnProto.IsPackableControlPacket(p.PacketType, len(p.Payload))
-			}, func(p *serverStreamTXPacket) uint64 {
-				return Enums.PacketIdentityKey(streamID, p.PacketType, p.SequenceNum, p.FragmentID)
-			})
-
-			if !ok {
-				break
+		if id == -1 {
+			for blocks < limit {
+				popped, ok := record.OrphanQueue.PopAnyIf(func(p VpnProto.Packet) bool {
+					return VpnProto.IsPackableControlPacket(p.PacketType, 0)
+				}, func(p VpnProto.Packet) uint64 {
+					return Enums.PacketTypeStreamKey(p.StreamID, p.PacketType)
+				})
+				if !ok {
+					break
+				}
+				payload = VpnProto.AppendPackedControlBlock(payload, popped.PacketType, popped.StreamID, popped.SequenceNum, popped.FragmentID, popped.TotalFragments)
+				blocks++
 			}
-
-			payload = VpnProto.AppendPackedControlBlock(payload, popped.PacketType, streamID, popped.SequenceNum, 0, 0)
-			blocks++
+		} else {
+			record.StreamsMu.RLock()
+			stream := record.Streams[uint16(id)]
+			record.StreamsMu.RUnlock()
+			if stream == nil || stream.TXQueue == nil {
+				continue
+			}
+			for blocks < limit {
+				popped, ok := stream.TXQueue.PopAnyIf(func(p *serverStreamTXPacket) bool {
+					return VpnProto.IsPackableControlPacket(p.PacketType, len(p.Payload))
+				}, func(p *serverStreamTXPacket) uint64 {
+					return Enums.PacketIdentityKey(uint16(id), p.PacketType, p.SequenceNum, p.FragmentID)
+				})
+				if !ok {
+					break
+				}
+				payload = VpnProto.AppendPackedControlBlock(payload, popped.PacketType, uint16(id), popped.SequenceNum, popped.FragmentID, popped.TotalFragments)
+				blocks++
+			}
 		}
 	}
 

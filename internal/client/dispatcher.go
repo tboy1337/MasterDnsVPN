@@ -58,7 +58,7 @@ func (c *Client) asyncStreamDispatcher(ctx context.Context) {
 	c.log.Debugf("🚀 <cyan>Stream Dispatcher started</cyan>")
 	defer c.asyncWG.Done()
 
-	var rrCursor uint16 = 0
+	var rrCursor int32 = -1
 	idleTimer := time.NewTimer(20 * time.Millisecond)
 	defer idleTimer.Stop()
 
@@ -78,64 +78,23 @@ func (c *Client) asyncStreamDispatcher(ctx context.Context) {
 		}
 		idleTimer.Reset(20 * time.Millisecond)
 
-		if orphanPacket, ok := c.dequeueOrphanReset(); ok && orphanPacket != nil {
-			c.pingManager.NotifyPacket(orphanPacket.PacketType, false)
-
-			conns := c.selectTargetConnections(orphanPacket.PacketType, orphanPacket.StreamID)
-			if len(conns) == 0 {
-				continue
-			}
-
-			for _, conn := range conns {
-				domain := conn.Domain
-				if domain == "" {
-					domain = c.cfg.Domains[0]
-				}
-
-				opts := VpnProto.BuildOptions{
-					SessionID:     c.sessionID,
-					SessionCookie: c.sessionCookie,
-					PacketType:    orphanPacket.PacketType,
-					StreamID:      orphanPacket.StreamID,
-					SequenceNum:   orphanPacket.SequenceNum,
-				}
-
-				encoded, err := VpnProto.BuildEncodedAuto(opts, c.codec, c.cfg.CompressionMinSize)
-				if err != nil {
-					continue
-				}
-
-				dnsPacket, err := buildTunnelTXTQuestion(domain, encoded)
-				if err != nil {
-					continue
-				}
-
-				select {
-				case c.txChannel <- asyncPacket{
-					conn:       conn,
-					packetType: orphanPacket.PacketType,
-					payload:    dnsPacket,
-				}:
-				default:
-				}
-			}
-			continue
-		}
-
 		c.streamsMu.RLock()
 		streamCount := len(c.active_streams)
-		if streamCount == 0 {
-			c.streamsMu.RUnlock()
-			continue
-		}
-
-		ids := make([]uint16, 0, streamCount)
+		ids := make([]int32, 0, streamCount+1)
 		streams := make(map[uint16]*Stream_client, streamCount)
 		for id, stream := range c.active_streams {
-			ids = append(ids, id)
+			ids = append(ids, int32(id))
 			streams[id] = stream
 		}
 		c.streamsMu.RUnlock()
+
+		if c.orphanQueue != nil && c.orphanQueue.Size() > 0 {
+			ids = append(ids, -1)
+		}
+
+		if len(ids) == 0 {
+			continue
+		}
 
 		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 
@@ -143,6 +102,8 @@ func (c *Client) asyncStreamDispatcher(ctx context.Context) {
 		var selected *Stream_client
 		var item *clientStreamTXPacket
 		var ok bool
+		var selectedStreamID uint16
+		var selectedID int32 = -2 // -2 means nothing selected
 		rrApplied := false
 
 		// Start search from rrCursor
@@ -161,17 +122,40 @@ func (c *Client) asyncStreamDispatcher(ctx context.Context) {
 			idx := (startIndex + i) % len(ids)
 			id := ids[idx]
 
-			s := streams[id]
-
-			if s == nil || s.txQueue == nil {
-				continue
+			if id == -1 {
+				if c.orphanQueue == nil || c.orphanQueue.Size() == 0 {
+					continue
+				}
+				p, _, popOk := c.orphanQueue.Pop(func(p VpnProto.Packet) uint64 {
+					return Enums.PacketTypeStreamKey(p.StreamID, p.PacketType)
+				})
+				if !popOk {
+					continue
+				}
+				item = &clientStreamTXPacket{
+					PacketType:     p.PacketType,
+					SequenceNum:    p.SequenceNum,
+					FragmentID:     p.FragmentID,
+					TotalFragments: p.TotalFragments,
+					Payload:        nil,
+				}
+				selectedStreamID = p.StreamID
+				selectedID = -1
+				ok = true
+			} else {
+				s := streams[uint16(id)]
+				if s == nil || s.txQueue == nil {
+					continue
+				}
+				item, _, ok = s.PopNextTXPacket()
+				if ok {
+					selectedStreamID = uint16(id)
+					selectedID = int32(id)
+					selected = s
+				}
 			}
 
-			// PopNextTXPacket returns the highest priority packet available for this stream.
-			item, _, ok = s.PopNextTXPacket()
 			if ok && item != nil {
-				// Mark the next RR start immediately based on the first stream that had data/ping.
-				// This ensures fairness even if we substitute a PING for another stream's data.
 				if !rrApplied {
 					rrCursor = id + 1
 					rrApplied = true
@@ -184,25 +168,34 @@ func (c *Client) asyncStreamDispatcher(ctx context.Context) {
 						if otherID == 0 {
 							continue
 						}
-						os := streams[otherID]
+						if otherID == -1 {
+							if c.orphanQueue != nil && c.orphanQueue.Size() > 0 {
+								hasOtherWork = true
+								break
+							}
+							continue
+						}
+						os := streams[uint16(otherID)]
 						if os != nil && os.txQueue != nil && os.txQueue.Size() > 0 {
 							hasOtherWork = true
 							break
 						}
 					}
 					if hasOtherWork {
-						s.ReleaseTXPacket(item) // Drop the PING as explained in the audio
+						if selected != nil {
+							selected.ReleaseTXPacket(item)
+						}
 						item = nil
+						ok = false
 						continue // Find the next stream with real data in this round
 					}
 				}
 
-				selected = s
 				break
 			}
 		}
 
-		if selected == nil || item == nil {
+		if selectedID == -2 || item == nil {
 			continue
 		}
 
@@ -215,36 +208,67 @@ func (c *Client) asyncStreamDispatcher(ctx context.Context) {
 
 		if VpnProto.IsPackableControlPacket(item.PacketType, len(item.Payload)) && maxBlocks > 1 {
 			payload := make([]byte, 0, maxBlocks*VpnProto.PackedControlBlockSize)
-			payload = VpnProto.AppendPackedControlBlock(payload, item.PacketType, selected.StreamID, item.SequenceNum, item.FragmentID, item.TotalFragments)
+			payload = VpnProto.AppendPackedControlBlock(payload, item.PacketType, selectedStreamID, item.SequenceNum, item.FragmentID, item.TotalFragments)
 			blocks := 1
 
-			// Pop more from current stream if possible (Any priority)
-			for blocks < maxBlocks {
-				popped, poppedOk := selected.txQueue.PopAnyIf(func(p *clientStreamTXPacket) bool {
-					return VpnProto.IsPackableControlPacket(p.PacketType, len(p.Payload))
-				}, func(p *clientStreamTXPacket) uint64 {
-					return Enums.PacketIdentityKey(selected.StreamID, p.PacketType, p.SequenceNum, p.FragmentID)
-				})
-				if !poppedOk {
-					break
+			// Pop more from current stream if possible
+			if selected != nil {
+				for blocks < maxBlocks {
+					popped, poppedOk := selected.txQueue.PopAnyIf(func(p *clientStreamTXPacket) bool {
+						return VpnProto.IsPackableControlPacket(p.PacketType, len(p.Payload))
+					}, func(p *clientStreamTXPacket) uint64 {
+						return Enums.PacketIdentityKey(selected.StreamID, p.PacketType, p.SequenceNum, p.FragmentID)
+					})
+					if !poppedOk {
+						break
+					}
+					payload = VpnProto.AppendPackedControlBlock(payload, popped.PacketType, selected.StreamID, popped.SequenceNum, popped.FragmentID, popped.TotalFragments)
+					blocks++
+					selected.ReleaseTXPacket(popped)
 				}
-				payload = VpnProto.AppendPackedControlBlock(payload, popped.PacketType, selected.StreamID, popped.SequenceNum, popped.FragmentID, popped.TotalFragments)
-				blocks++
-				selected.ReleaseTXPacket(popped)
+			} else if selectedID == -1 {
+				// Packing from orphanQueue
+				for blocks < maxBlocks {
+					popped, poppedOk := c.orphanQueue.PopAnyIf(func(p VpnProto.Packet) bool {
+						return VpnProto.IsPackableControlPacket(p.PacketType, 0)
+					}, func(p VpnProto.Packet) uint64 {
+						return Enums.PacketTypeStreamKey(p.StreamID, p.PacketType)
+					})
+					if !poppedOk {
+						break
+					}
+					payload = VpnProto.AppendPackedControlBlock(payload, popped.PacketType, popped.StreamID, popped.SequenceNum, popped.FragmentID, popped.TotalFragments)
+					blocks++
+				}
 			}
 
-			// Pop from other streams to fill block if space remains (Any priority)
+			// Pop from other streams to fill block if space remains
 			if blocks < maxBlocks {
-				for _, sid := range ids {
+				for _, otherID := range ids {
 					if blocks >= maxBlocks {
 						break
 					}
-					if sid == selected.StreamID {
+					if otherID == selectedID {
 						continue
 					}
 
-					otherStream := streams[sid]
+					if otherID == -1 {
+						for blocks < maxBlocks {
+							popped, poppedOk := c.orphanQueue.PopAnyIf(func(p VpnProto.Packet) bool {
+								return VpnProto.IsPackableControlPacket(p.PacketType, 0)
+							}, func(p VpnProto.Packet) uint64 {
+								return Enums.PacketTypeStreamKey(p.StreamID, p.PacketType)
+							})
+							if !poppedOk {
+								break
+							}
+							payload = VpnProto.AppendPackedControlBlock(payload, popped.PacketType, popped.StreamID, popped.SequenceNum, popped.FragmentID, popped.TotalFragments)
+							blocks++
+						}
+						continue
+					}
 
+					otherStream := streams[uint16(otherID)]
 					if otherStream == nil || otherStream.txQueue == nil {
 						continue
 					}
@@ -252,12 +276,12 @@ func (c *Client) asyncStreamDispatcher(ctx context.Context) {
 						popped, poppedOk := otherStream.txQueue.PopAnyIf(func(p *clientStreamTXPacket) bool {
 							return VpnProto.IsPackableControlPacket(p.PacketType, len(p.Payload))
 						}, func(p *clientStreamTXPacket) uint64 {
-							return Enums.PacketIdentityKey(sid, p.PacketType, p.SequenceNum, p.FragmentID)
+							return Enums.PacketIdentityKey(uint16(otherID), p.PacketType, p.SequenceNum, p.FragmentID)
 						})
 						if !poppedOk {
 							break
 						}
-						payload = VpnProto.AppendPackedControlBlock(payload, popped.PacketType, sid, popped.SequenceNum, popped.FragmentID, popped.TotalFragments)
+						payload = VpnProto.AppendPackedControlBlock(payload, popped.PacketType, uint16(otherID), popped.SequenceNum, popped.FragmentID, popped.TotalFragments)
 						blocks++
 						otherStream.ReleaseTXPacket(popped)
 					}
@@ -265,72 +289,65 @@ func (c *Client) asyncStreamDispatcher(ctx context.Context) {
 			}
 
 			if blocks > 1 {
-				// Send as packed controls
-				finalPacket = asyncPacket{
-					packetType: Enums.PACKET_PACKED_CONTROL_BLOCKS,
-					payload:    payload,
-				}
-				selected.ReleaseTXPacket(item)
+				finalPacket.packetType = Enums.PACKET_PACKED_CONTROL_BLOCKS
+				finalPacket.payload = payload
 				wasPacked = true
-			} else {
-				// Fallback natively if only 1 block found
-				finalPacket = asyncPacket{
-					packetType: item.PacketType,
-					payload:    item.Payload,
+				if selected != nil {
+					selected.ReleaseTXPacket(item)
 				}
+			} else {
+				finalPacket.packetType = item.PacketType
+				finalPacket.payload = item.Payload
 			}
 		} else {
-			finalPacket = asyncPacket{
-				packetType: item.PacketType,
-				payload:    item.Payload,
-			}
+			finalPacket.packetType = item.PacketType
+			finalPacket.payload = item.Payload
 		}
 
-		// Notify Ping Manager of outbound activity
 		c.pingManager.NotifyPacket(finalPacket.packetType, false)
 
-		// Packet Duplication Logic
-		conns := c.selectTargetConnections(finalPacket.packetType, selected.StreamID)
+		conns := c.selectTargetConnections(finalPacket.packetType, selectedStreamID)
 		if len(conns) == 0 {
 			if !wasPacked {
-				selected.ReleaseTXPacket(item)
+				if selected != nil {
+					key := Enums.PacketIdentityKey(selected.StreamID, item.PacketType, item.SequenceNum, item.FragmentID)
+					selected.txQueue.Push(0, key, item)
+				} else if selectedID == -1 {
+					c.enqueueOrphanReset(item.PacketType, selectedStreamID, item.SequenceNum)
+				}
 			}
 			continue
 		}
 
 		for _, conn := range conns {
-			// Choose domain for this connection
 			domain := conn.Domain
 			if domain == "" {
 				domain = c.cfg.Domains[0]
 			}
 
-			// Build THE final wrapped DNS packet
 			opts := VpnProto.BuildOptions{
 				SessionID:     c.sessionID,
-				PacketType:    finalPacket.packetType,
 				SessionCookie: c.sessionCookie,
+				PacketType:    finalPacket.packetType,
+				Payload:       finalPacket.payload,
 			}
 
-			if !wasPacked {
-				opts.StreamID = selected.StreamID
+			if wasPacked {
+				opts.StreamID = 0
+			} else {
+				opts.StreamID = selectedStreamID
 				opts.SequenceNum = item.SequenceNum
 				opts.FragmentID = item.FragmentID
 				opts.TotalFragments = item.TotalFragments
-				opts.Payload = item.Payload
-			} else {
-				opts.Payload = finalPacket.payload
 			}
 
 			encoded, err := VpnProto.BuildEncodedAuto(opts, c.codec, c.cfg.CompressionMinSize)
 			if err != nil {
-				c.log.Errorf("Failed to encode packet <magenta>|</magenta> <blue>Type</blue>: <cyan>%s</cyan> <magenta>|</magenta> <blue>Stream</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Seq</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Frag</blue>: <cyan>%d/%d</cyan> <magenta>|</magenta> <blue>Error</blue>: <cyan>%v</cyan>", Enums.PacketTypeName(item.PacketType), selected.StreamID, item.SequenceNum, item.FragmentID+1, max(1, int(item.TotalFragments)), err)
 				continue
 			}
 
 			dnsPacket, err := buildTunnelTXTQuestion(domain, encoded)
 			if err != nil {
-				c.log.Errorf("Failed to build DNS question <magenta>|</magenta> <blue>Type</blue>: <cyan>%s</cyan> <magenta>|</magenta> <blue>Stream</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Seq</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Resolver</blue>: <cyan>%s</cyan> <magenta>|</magenta> <blue>Error</blue>: <cyan>%v</cyan>", Enums.PacketTypeName(item.PacketType), selected.StreamID, item.SequenceNum, domain, err)
 				continue
 			}
 
@@ -338,18 +355,16 @@ func (c *Client) asyncStreamDispatcher(ctx context.Context) {
 			pkt.conn = conn
 			pkt.payload = dnsPacket
 
-			// Send to TX channel
 			select {
 			case c.txChannel <- pkt:
 			default:
 			}
 		}
 
-		if !wasPacked {
+		if !wasPacked && selected != nil {
 			selected.ReleaseTXPacket(item)
 		}
 
-		// Loop quickly if there's more potential work
 		select {
 		case c.txSignal <- struct{}{}:
 		default:

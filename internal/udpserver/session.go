@@ -65,7 +65,7 @@ type sessionRecord struct {
 	// New fields for ARQ refactor
 	Streams        map[uint16]*Stream_server
 	ActiveStreams  []uint16 // Sorted list of active stream IDs for Round-Robin
-	RRStreamID     uint16   // Last served stream ID for RR
+	RRStreamID     int32    // Last served stream ID for RR
 	EnqueueSeq     uint64   // Global sequence for FIFO inside same priority
 	StreamsMu      sync.RWMutex
 	RecentlyClosed map[uint16]time.Time
