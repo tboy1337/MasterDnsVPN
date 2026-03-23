@@ -20,146 +20,92 @@ import (
 )
 
 type ClientConfig struct {
-	ConfigDir                             string            `toml:"-"`
-	ConfigPath                            string            `toml:"-"`
-	ProtocolType                          string            `toml:"PROTOCOL_TYPE"`
-	Domains                               []string          `toml:"DOMAINS"`
-	ListenIP                              string            `toml:"LISTEN_IP"`
-	ListenPort                            int               `toml:"LISTEN_PORT"`
-	LocalSOCKS5HandshakeSec               float64           `toml:"LOCAL_SOCKS5_HANDSHAKE_TIMEOUT_SECONDS"`
-	SOCKS5Auth                            bool              `toml:"SOCKS5_AUTH"`
-	SOCKS5User                            string            `toml:"SOCKS5_USER"`
-	SOCKS5Pass                            string            `toml:"SOCKS5_PASS"`
-	LocalDNSEnabled                       bool              `toml:"LOCAL_DNS_ENABLED"`
-	LocalDNSIP                            string            `toml:"LOCAL_DNS_IP"`
-	LocalDNSPort                          int               `toml:"LOCAL_DNS_PORT"`
-	LocalDNSWorkers                       int               `toml:"LOCAL_DNS_WORKERS"`
-	LocalDNSQueueSize                     int               `toml:"LOCAL_DNS_QUEUE_SIZE"`
-	LocalDNSCacheMaxRecords               int               `toml:"LOCAL_DNS_CACHE_MAX_RECORDS"`
-	LocalDNSCacheTTLSeconds               float64           `toml:"LOCAL_DNS_CACHE_TTL_SECONDS"`
-	LocalDNSPendingTimeoutSec             float64           `toml:"LOCAL_DNS_PENDING_TIMEOUT_SECONDS"`
-	LocalDNSFragmentTimeoutSec            float64           `toml:"LOCAL_DNS_FRAGMENT_ASSEMBLY_TIMEOUT_SECONDS"`
-	LocalDNSCachePersist                  bool              `toml:"LOCAL_DNS_CACHE_PERSIST_TO_FILE"`
-	LocalDNSCacheFlushSec                 float64           `toml:"LOCAL_DNS_CACHE_FLUSH_INTERVAL_SECONDS"`
-	ResolverBalancingStrategy             int               `toml:"RESOLVER_BALANCING_STRATEGY"`
-	AutoDisableTimeoutServers             bool              `toml:"AUTO_DISABLE_TIMEOUT_SERVERS"`
-	AutoDisableTimeoutWindow              float64           `toml:"AUTO_DISABLE_TIMEOUT_WINDOW_SECONDS"`
-	AutoDisableMinObservations            int               `toml:"AUTO_DISABLE_TIMEOUT_MIN_OBSERVATIONS"`
-	AutoDisableCheckInterval              float64           `toml:"AUTO_DISABLE_CHECK_INTERVAL_SECONDS"`
-	RecheckInactiveEnabled                bool              `toml:"RECHECK_INACTIVE_SERVERS_ENABLED"`
-	RecheckInactiveInterval               float64           `toml:"RECHECK_INACTIVE_INTERVAL_SECONDS"`
-	RecheckServerInterval                 float64           `toml:"RECHECK_SERVER_INTERVAL_SECONDS"`
-	RecheckBatchSize                      int               `toml:"RECHECK_BATCH_SIZE"`
-	PacketDuplicationCount                int               `toml:"PACKET_DUPLICATION_COUNT"`
-	SetupPacketDuplicationCount           int               `toml:"SETUP_PACKET_DUPLICATION_COUNT"`
-	StreamResolverFailoverResendThreshold int               `toml:"STREAM_RESOLVER_FAILOVER_RESEND_THRESHOLD"`
-	StreamResolverFailoverCooldownSec     float64           `toml:"STREAM_RESOLVER_FAILOVER_COOLDOWN"`
-	MaxPacketsPerBatch                    int               `toml:"MAX_PACKETS_PER_BATCH"`
-	StreamTXWindow                        int               `toml:"STREAM_TX_WINDOW"`
-	StreamTXQueueLimit                    int               `toml:"STREAM_TX_QUEUE_LIMIT"`
-	StreamTXMaxRetries                    int               `toml:"STREAM_TX_MAX_RETRIES"`
-	StreamTXTTLSeconds                    float64           `toml:"STREAM_TX_TTL_SECONDS"`
-	BaseEncodeData                        bool              `toml:"BASE_ENCODE_DATA"`
-	UploadCompressionType                 int               `toml:"UPLOAD_COMPRESSION_TYPE"`
-	DownloadCompressionType               int               `toml:"DOWNLOAD_COMPRESSION_TYPE"`
-	CompressionMinSize                    int               `toml:"COMPRESSION_MIN_SIZE"`
-	DataEncryptionMethod                  int               `toml:"DATA_ENCRYPTION_METHOD"`
-	EncryptionKey                         string            `toml:"ENCRYPTION_KEY"`
-	MinUploadMTU                          int               `toml:"MIN_UPLOAD_MTU"`
-	MinDownloadMTU                        int               `toml:"MIN_DOWNLOAD_MTU"`
-	MaxUploadMTU                          int               `toml:"MAX_UPLOAD_MTU"`
-	MaxDownloadMTU                        int               `toml:"MAX_DOWNLOAD_MTU"`
-	MTUTestRetries                        int               `toml:"MTU_TEST_RETRIES"`
-	MTUTestTimeout                        float64           `toml:"MTU_TEST_TIMEOUT"`
-	MTUTestParallelism                    int               `toml:"MTU_TEST_PARALLELISM"`
-	SaveMTUServersToFile                  bool              `toml:"SAVE_MTU_SERVERS_TO_FILE"`
-	MTUServersFileName                    string            `toml:"MTU_SERVERS_FILE_NAME"`
-	MTUServersFileFormat                  string            `toml:"MTU_SERVERS_FILE_FORMAT"`
-	MTUUsingSeparatorText                 string            `toml:"MTU_USING_SECTION_SEPARATOR_TEXT"`
-	MTURemovedServerLogFormat             string            `toml:"MTU_REMOVED_SERVER_LOG_FORMAT"`
-	MTUAddedServerLogFormat               string            `toml:"MTU_ADDED_SERVER_LOG_FORMAT"`
-	ResolverRemovedServerLogFormat        string            `toml:"RESOLVER_REMOVED_SERVER_LOG_FORMAT"`
-	ResolverAddedServerLogFormat          string            `toml:"RESOLVER_ADDED_SERVER_LOG_FORMAT"`
-	LogLevel                              string            `toml:"LOG_LEVEL"`
-	ARQWindowSize                         int               `toml:"ARQ_WINDOW_SIZE"`
-	MaxInflightPackets                    int               `toml:"MAX_INFLIGHT_PACKETS"`
-	TunnelWriterWorkers                   int               `toml:"TUNNEL_WRITER_WORKERS"`
-	TunnelReaderWorkers                   int               `toml:"TUNNEL_READER_WORKERS"`
-	TunnelProcessWorkers                  int               `toml:"TUNNEL_PROCESS_WORKERS"`
-	TunnelPacketQueueSize                 int               `toml:"TUNNEL_PACKET_QUEUE_SIZE"`
-	TunnelPacketTimeout                   float64           `toml:"TUNNEL_PACKET_TIMEOUT"`
-	Resolvers                             []ResolverAddress `toml:"-"`
-	ResolverMap                           map[string]int    `toml:"-"`
+	ConfigDir                   string            `toml:"-"`
+	ConfigPath                  string            `toml:"-"`
+	ProtocolType                string            `toml:"PROTOCOL_TYPE"`
+	Domains                     []string          `toml:"DOMAINS"`
+	ListenIP                    string            `toml:"LISTEN_IP"`
+	ListenPort                  int               `toml:"LISTEN_PORT"`
+	SOCKS5Auth                  bool              `toml:"SOCKS5_AUTH"`
+	SOCKS5User                  string            `toml:"SOCKS5_USER"`
+	SOCKS5Pass                  string            `toml:"SOCKS5_PASS"`
+	LocalDNSEnabled             bool              `toml:"LOCAL_DNS_ENABLED"`
+	LocalDNSIP                  string            `toml:"LOCAL_DNS_IP"`
+	LocalDNSPort                int               `toml:"LOCAL_DNS_PORT"`
+	LocalDNSCacheMaxRecords     int               `toml:"LOCAL_DNS_CACHE_MAX_RECORDS"`
+	LocalDNSCacheTTLSeconds     float64           `toml:"LOCAL_DNS_CACHE_TTL_SECONDS"`
+	LocalDNSPendingTimeoutSec   float64           `toml:"LOCAL_DNS_PENDING_TIMEOUT_SECONDS"`
+	LocalDNSCachePersist        bool              `toml:"LOCAL_DNS_CACHE_PERSIST_TO_FILE"`
+	LocalDNSCacheFlushSec       float64           `toml:"LOCAL_DNS_CACHE_FLUSH_INTERVAL_SECONDS"`
+	ResolverBalancingStrategy   int               `toml:"RESOLVER_BALANCING_STRATEGY"`
+	PacketDuplicationCount      int               `toml:"PACKET_DUPLICATION_COUNT"`
+	SetupPacketDuplicationCount int               `toml:"SETUP_PACKET_DUPLICATION_COUNT"`
+	BaseEncodeData              bool              `toml:"BASE_ENCODE_DATA"`
+	UploadCompressionType       int               `toml:"UPLOAD_COMPRESSION_TYPE"`
+	DownloadCompressionType     int               `toml:"DOWNLOAD_COMPRESSION_TYPE"`
+	CompressionMinSize          int               `toml:"COMPRESSION_MIN_SIZE"`
+	DataEncryptionMethod        int               `toml:"DATA_ENCRYPTION_METHOD"`
+	EncryptionKey               string            `toml:"ENCRYPTION_KEY"`
+	MinUploadMTU                int               `toml:"MIN_UPLOAD_MTU"`
+	MinDownloadMTU              int               `toml:"MIN_DOWNLOAD_MTU"`
+	MaxUploadMTU                int               `toml:"MAX_UPLOAD_MTU"`
+	MaxDownloadMTU              int               `toml:"MAX_DOWNLOAD_MTU"`
+	MTUTestRetries              int               `toml:"MTU_TEST_RETRIES"`
+	MTUTestTimeout              float64           `toml:"MTU_TEST_TIMEOUT"`
+	MTUTestParallelism          int               `toml:"MTU_TEST_PARALLELISM"`
+	SaveMTUServersToFile        bool              `toml:"SAVE_MTU_SERVERS_TO_FILE"`
+	MTUServersFileName          string            `toml:"MTU_SERVERS_FILE_NAME"`
+	MTUServersFileFormat        string            `toml:"MTU_SERVERS_FILE_FORMAT"`
+	MTUUsingSeparatorText       string            `toml:"MTU_USING_SECTION_SEPARATOR_TEXT"`
+	MTURemovedServerLogFormat   string            `toml:"MTU_REMOVED_SERVER_LOG_FORMAT"`
+	MTUAddedServerLogFormat     string            `toml:"MTU_ADDED_SERVER_LOG_FORMAT"`
+	LogLevel                    string            `toml:"LOG_LEVEL"`
+	ARQWindowSize               int               `toml:"ARQ_WINDOW_SIZE"`
+	Resolvers                   []ResolverAddress `toml:"-"`
+	ResolverMap                 map[string]int    `toml:"-"`
 }
 
 func defaultClientConfig() ClientConfig {
 	return ClientConfig{
-		ProtocolType:                          "SOCKS5",
-		Domains:                               nil,
-		ListenIP:                              "127.0.0.1",
-		ListenPort:                            1080,
-		LocalSOCKS5HandshakeSec:               10.0,
-		SOCKS5Auth:                            false,
-		SOCKS5User:                            "",
-		SOCKS5Pass:                            "",
-		LocalDNSEnabled:                       false,
-		LocalDNSIP:                            "127.0.0.1",
-		LocalDNSPort:                          5353,
-		LocalDNSWorkers:                       2,
-		LocalDNSQueueSize:                     512,
-		LocalDNSCacheMaxRecords:               2000,
-		LocalDNSCacheTTLSeconds:               3600.0,
-		LocalDNSPendingTimeoutSec:             600.0,
-		LocalDNSFragmentTimeoutSec:            300.0,
-		LocalDNSCachePersist:                  true,
-		LocalDNSCacheFlushSec:                 60.0,
-		ResolverBalancingStrategy:             0,
-		AutoDisableTimeoutServers:             true,
-		AutoDisableTimeoutWindow:              300.0,
-		AutoDisableMinObservations:            3,
-		AutoDisableCheckInterval:              1.0,
-		RecheckInactiveEnabled:                true,
-		RecheckInactiveInterval:               1800.0,
-		RecheckServerInterval:                 3.0,
-		RecheckBatchSize:                      5,
-		PacketDuplicationCount:                1,
-		SetupPacketDuplicationCount:           2,
-		StreamResolverFailoverResendThreshold: 2,
-		StreamResolverFailoverCooldownSec:     1.0,
-		MaxPacketsPerBatch:                    5,
-		StreamTXWindow:                        4,
-		StreamTXQueueLimit:                    128,
-		StreamTXMaxRetries:                    24,
-		StreamTXTTLSeconds:                    120.0,
-		BaseEncodeData:                        false,
-		UploadCompressionType:                 compression.TypeOff,
-		DownloadCompressionType:               compression.TypeOff,
-		CompressionMinSize:                    compression.DefaultMinSize,
-		DataEncryptionMethod:                  1,
-		EncryptionKey:                         "",
-		MinUploadMTU:                          70,
-		MinDownloadMTU:                        150,
-		MaxUploadMTU:                          150,
-		MaxDownloadMTU:                        200,
-		MTUTestRetries:                        2,
-		MTUTestTimeout:                        2.0,
-		MTUTestParallelism:                    6,
-		SaveMTUServersToFile:                  false,
-		MTUServersFileName:                    "masterdnsvpn_success_test_{time}.log",
-		MTUServersFileFormat:                  "{IP} - UP: {UP_MTU} DOWN: {DOWN-MTU}",
-		MTUUsingSeparatorText:                 "",
-		MTURemovedServerLogFormat:             "",
-		MTUAddedServerLogFormat:               "",
-		ResolverRemovedServerLogFormat:        "",
-		ResolverAddedServerLogFormat:          "",
-		LogLevel:                              "INFO",
-		ARQWindowSize:                         600,
-		MaxInflightPackets:                    128,
-		TunnelWriterWorkers:                   4,
-		TunnelReaderWorkers:                   2,
-		TunnelProcessWorkers:                  8,
-		TunnelPacketQueueSize:                 2048,
-		TunnelPacketTimeout:                   15.0,
+		ProtocolType:                "SOCKS5",
+		Domains:                     nil,
+		ListenIP:                    "127.0.0.1",
+		ListenPort:                  18000,
+		SOCKS5Auth:                  false,
+		SOCKS5User:                  "master_dns_vpn",
+		SOCKS5Pass:                  "master_dns_vpn",
+		LocalDNSEnabled:             false,
+		LocalDNSIP:                  "127.0.0.1",
+		LocalDNSPort:                53,
+		LocalDNSCacheMaxRecords:     5000,
+		LocalDNSCacheTTLSeconds:     28800.0,
+		LocalDNSPendingTimeoutSec:   300.0,
+		LocalDNSCachePersist:        true,
+		LocalDNSCacheFlushSec:       60.0,
+		ResolverBalancingStrategy:   0,
+		PacketDuplicationCount:      2,
+		SetupPacketDuplicationCount: 3,
+		BaseEncodeData:              false,
+		UploadCompressionType:       compression.TypeOff,
+		DownloadCompressionType:     compression.TypeOff,
+		CompressionMinSize:          compression.DefaultMinSize,
+		DataEncryptionMethod:        1,
+		EncryptionKey:               "",
+		MinUploadMTU:                70,
+		MinDownloadMTU:              150,
+		MaxUploadMTU:                150,
+		MaxDownloadMTU:              200,
+		MTUTestRetries:              2,
+		MTUTestTimeout:              2.0,
+		MTUTestParallelism:          6,
+		SaveMTUServersToFile:        false,
+		MTUServersFileName:          "masterdnsvpn_success_test_{time}.log",
+		MTUServersFileFormat:        "{IP} - UP: {UP_MTU} DOWN: {DOWN-MTU}",
+		MTUUsingSeparatorText:       "",
+		MTURemovedServerLogFormat:   "",
+		MTUAddedServerLogFormat:     "",
+		LogLevel:                    "INFO",
+		ARQWindowSize:               2000,
 	}
 }
 
@@ -204,8 +150,6 @@ func LoadClientConfig(filename string) (ClientConfig, error) {
 		return cfg, fmt.Errorf("invalid LISTEN_PORT: %d", cfg.ListenPort)
 	}
 
-	cfg.LocalSOCKS5HandshakeSec = defaultFloatAtMostZero(cfg.LocalSOCKS5HandshakeSec, 10.0)
-
 	if len(cfg.SOCKS5User) > 255 {
 		return cfg, fmt.Errorf("SOCKS5_USER cannot exceed 255 bytes")
 	}
@@ -224,18 +168,10 @@ func LoadClientConfig(filename string) (ClientConfig, error) {
 		return cfg, fmt.Errorf("invalid LOCAL_DNS_PORT: %d", cfg.LocalDNSPort)
 	}
 
-	cfg.LocalDNSWorkers = defaultIntBelow(cfg.LocalDNSWorkers, 1, 1)
-	cfg.LocalDNSQueueSize = defaultIntBelow(cfg.LocalDNSQueueSize, 1, 512)
 	cfg.LocalDNSCacheMaxRecords = defaultIntBelow(cfg.LocalDNSCacheMaxRecords, 1, 2000)
 	cfg.LocalDNSCacheTTLSeconds = defaultFloatAtMostZero(cfg.LocalDNSCacheTTLSeconds, 3600.0)
 	cfg.LocalDNSPendingTimeoutSec = defaultFloatAtMostZero(cfg.LocalDNSPendingTimeoutSec, 600.0)
-	cfg.LocalDNSFragmentTimeoutSec = defaultFloatAtMostZero(cfg.LocalDNSFragmentTimeoutSec, 300.0)
 	cfg.LocalDNSCacheFlushSec = defaultFloatAtMostZero(cfg.LocalDNSCacheFlushSec, 60.0)
-	cfg.MaxPacketsPerBatch = defaultIntBelow(cfg.MaxPacketsPerBatch, 1, 5)
-	cfg.StreamTXWindow = clampInt(defaultIntBelow(cfg.StreamTXWindow, 1, 4), 1, 32)
-	cfg.StreamTXQueueLimit = clampInt(defaultIntBelow(cfg.StreamTXQueueLimit, 1, 128), 1, 4096)
-	cfg.StreamTXMaxRetries = clampInt(defaultIntBelow(cfg.StreamTXMaxRetries, 1, 24), 1, 512)
-	cfg.StreamTXTTLSeconds = defaultFloatAtMostZero(cfg.StreamTXTTLSeconds, 120.0)
 
 	if cfg.UploadCompressionType < compression.TypeOff || cfg.UploadCompressionType > compression.TypeZLIB {
 		return cfg, fmt.Errorf("invalid UPLOAD_COMPRESSION_TYPE: %d", cfg.UploadCompressionType)
@@ -251,23 +187,9 @@ func LoadClientConfig(filename string) (ClientConfig, error) {
 		return cfg, fmt.Errorf("invalid RESOLVER_BALANCING_STRATEGY: %d", cfg.ResolverBalancingStrategy)
 	}
 
-	cfg.AutoDisableTimeoutWindow = defaultFloatAtMostZero(cfg.AutoDisableTimeoutWindow, 300.0)
-	cfg.AutoDisableMinObservations = defaultIntBelow(cfg.AutoDisableMinObservations, 1, 3)
-	cfg.AutoDisableCheckInterval = defaultFloatBelow(cfg.AutoDisableCheckInterval, 0.5, 1.0)
-	cfg.RecheckInactiveInterval = defaultFloatBelow(cfg.RecheckInactiveInterval, 60.0, 1800.0)
-	cfg.RecheckServerInterval = defaultFloatBelow(cfg.RecheckServerInterval, 1.0, 3.0)
-	cfg.RecheckBatchSize = clampInt(defaultIntBelow(cfg.RecheckBatchSize, 1, 1), 1, 64)
 	cfg.PacketDuplicationCount = clampInt(defaultIntBelow(cfg.PacketDuplicationCount, 1, 1), 1, 8)
 	cfg.SetupPacketDuplicationCount = clampInt(defaultIntBelow(cfg.SetupPacketDuplicationCount, 1, max(2, cfg.PacketDuplicationCount)), cfg.PacketDuplicationCount, 8)
-	cfg.StreamResolverFailoverResendThreshold = clampInt(defaultIntBelow(cfg.StreamResolverFailoverResendThreshold, 1, 2), 1, 64)
-	cfg.StreamResolverFailoverCooldownSec = defaultFloatBelow(cfg.StreamResolverFailoverCooldownSec, 0.1, 1.0)
 	cfg.ARQWindowSize = clampInt(defaultIntBelow(cfg.ARQWindowSize, 1, 600), 1, 4096)
-	cfg.MaxInflightPackets = clampInt(defaultIntBelow(cfg.MaxInflightPackets, 1, 128), 1, 2048)
-	cfg.TunnelWriterWorkers = clampInt(defaultIntBelow(cfg.TunnelWriterWorkers, 1, 4), 1, 64)
-	cfg.TunnelReaderWorkers = clampInt(defaultIntBelow(cfg.TunnelReaderWorkers, 1, 2), 1, 64)
-	cfg.TunnelProcessWorkers = clampInt(defaultIntBelow(cfg.TunnelProcessWorkers, 1, 8), 1, 128)
-	cfg.TunnelPacketQueueSize = clampInt(defaultIntBelow(cfg.TunnelPacketQueueSize, 128, 2048), 128, 65535)
-	cfg.TunnelPacketTimeout = defaultFloatBelow(cfg.TunnelPacketTimeout, 0.1, 15.0)
 
 	if cfg.MinUploadMTU < 0 || cfg.MinDownloadMTU < 0 || cfg.MaxUploadMTU < 0 || cfg.MaxDownloadMTU < 0 {
 		return cfg, fmt.Errorf("mtu values cannot be negative")
@@ -289,20 +211,6 @@ func LoadClientConfig(filename string) (ClientConfig, error) {
 	cfg.MTUUsingSeparatorText = strings.TrimSpace(cfg.MTUUsingSeparatorText)
 	cfg.MTURemovedServerLogFormat = strings.TrimSpace(cfg.MTURemovedServerLogFormat)
 	cfg.MTUAddedServerLogFormat = strings.TrimSpace(cfg.MTUAddedServerLogFormat)
-	cfg.ResolverRemovedServerLogFormat = strings.TrimSpace(cfg.ResolverRemovedServerLogFormat)
-	cfg.ResolverAddedServerLogFormat = strings.TrimSpace(cfg.ResolverAddedServerLogFormat)
-	if cfg.ResolverRemovedServerLogFormat == "" {
-		cfg.ResolverRemovedServerLogFormat = cfg.MTURemovedServerLogFormat
-	}
-	if cfg.ResolverAddedServerLogFormat == "" {
-		cfg.ResolverAddedServerLogFormat = cfg.MTUAddedServerLogFormat
-	}
-	if cfg.MTURemovedServerLogFormat == "" {
-		cfg.MTURemovedServerLogFormat = cfg.ResolverRemovedServerLogFormat
-	}
-	if cfg.MTUAddedServerLogFormat == "" {
-		cfg.MTUAddedServerLogFormat = cfg.ResolverAddedServerLogFormat
-	}
 
 	cfg.EncryptionKey = strings.TrimSpace(cfg.EncryptionKey)
 	if cfg.EncryptionKey == "" {
