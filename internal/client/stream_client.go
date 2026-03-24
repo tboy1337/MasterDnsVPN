@@ -62,13 +62,9 @@ type Stream_client struct {
 	LastResolverFailoverAt time.Time
 	HandshakeLastProgress  time.Time
 
-	statusMu             sync.RWMutex
-	terminalSince        time.Time
-	pendingWatchCancel   chan struct{}
-	pendingWatchDone     chan struct{}
-	pendingWatchOnce     sync.Once
-	pendingWatchStopOnce sync.Once
-	socksResultMu        sync.Mutex
+	statusMu      sync.RWMutex
+	terminalSince time.Time
+	socksResultMu sync.Mutex
 }
 
 // get_new_stream_id finds the next available stream ID using a circular counter (1-65535).
@@ -164,7 +160,6 @@ func (c *Client) new_stream(streamID uint16, conn net.Conn, targetPayload []byte
 
 	if conn != nil && streamID != 0 && c.cfg.ProtocolType == "SOCKS5" {
 		s.SetStatus(streamStatusSocksConnecting)
-		s.startPendingSOCKSWatch()
 	}
 
 	return s
@@ -227,8 +222,6 @@ func (s *Stream_client) GetQueuedPacket(packetType uint8, sequenceNum uint16, fr
 }
 
 func (s *Stream_client) cleanupResources() {
-	s.stopPendingSOCKSWatch(false)
-
 	if s.NetConn != nil {
 		_ = s.NetConn.Close()
 	}
@@ -258,7 +251,6 @@ func (s *Stream_client) CloseStream(force bool, ttl time.Duration) {
 		return
 	}
 
-	s.stopPendingSOCKSWatch(false)
 	if a, ok := s.Stream.(*arq.ARQ); ok && a != nil {
 		a.Close("Close stream requested", arq.CloseOptions{
 			Force:   force,
@@ -330,56 +322,6 @@ func (s *Stream_client) TerminalSince() time.Time {
 	s.statusMu.RLock()
 	defer s.statusMu.RUnlock()
 	return s.terminalSince
-}
-
-func (s *Stream_client) startPendingSOCKSWatch() {
-	if s == nil || s.NetConn == nil {
-		return
-	}
-
-	s.pendingWatchOnce.Do(func() {
-		s.pendingWatchCancel = make(chan struct{})
-		s.pendingWatchDone = make(chan struct{})
-
-		go func() {
-			defer close(s.pendingWatchDone)
-
-			for {
-				select {
-				case <-s.pendingWatchCancel:
-					return
-				case <-time.After(200 * time.Millisecond):
-				}
-
-				if s.StatusValue() != streamStatusSocksConnecting {
-					return
-				}
-			}
-		}()
-	})
-}
-
-func (s *Stream_client) stopPendingSOCKSWatch(wait bool) {
-	if s == nil || s.pendingWatchCancel == nil {
-		return
-	}
-
-	s.pendingWatchStopOnce.Do(func() {
-		close(s.pendingWatchCancel)
-	})
-
-	if wait && s.pendingWatchDone != nil {
-		select {
-		case <-s.pendingWatchDone:
-		case <-time.After(500 * time.Millisecond):
-		}
-	}
-
-	// The watcher no longer probes the socket for early payload bytes; ARQ will
-	// consume any buffered local data once ioReady flips to true.
-	if s.NetConn != nil {
-		_ = s.NetConn.SetReadDeadline(time.Time{})
-	}
 }
 
 // -----------------------------------------------------------------------------------------

@@ -378,8 +378,6 @@ func (c *Client) writeSocksConnectResult(streamID uint16, rep byte) error {
 		return errLateSocksResult
 	}
 
-	s.stopPendingSOCKSWatch(true)
-
 	var err error
 	if s.LocalSocksVersion == SOCKS4_VERSION {
 		err = c.sendSocks4Reply(s.NetConn, rep == SOCKS5_REPLY_SUCCESS)
@@ -465,7 +463,6 @@ func (c *Client) handlePendingSOCKSLocalClose(streamID uint16, reason string) {
 	}
 
 	s.SetStatus(streamStatusCancelled)
-	s.stopPendingSOCKSWatch(false)
 	if s.NetConn != nil {
 		_ = s.NetConn.Close()
 	}
