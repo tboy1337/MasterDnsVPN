@@ -496,3 +496,15 @@ jobs:
             echo "No artifacts found to upload. Aborting release." >&2
             exit 1
           fi
+
+      - name: Create GitHub Release and upload assets
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            release_assets/**/*.zip
+            release_assets/**/*.tar.gz
+          tag_name: ${{ needs.preflight.outputs.release_tag }}
+          name: Release ${{ needs.preflight.outputs.release_tag }}
+          body: ${{ fromJson(steps.create_release.outputs.result).body }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
