@@ -1528,19 +1528,17 @@ func (a *ARQ) handleTerminalRetransmitState(now time.Time) bool {
 
 	if a.waitingAck && !a.ackWaitDeadline.IsZero() && now.After(a.ackWaitDeadline) {
 		waitingFor := a.waitingAckFor
+		if waitingFor == Enums.PACKET_STREAM_FIN && a.finSeqSent != nil {
+			a.ackWaitDeadline = now.Add(a.terminalAckWait)
+			a.mu.Unlock()
+			return false
+		}
+
 		a.mu.Unlock()
 
 		if waitingFor == Enums.PACKET_STREAM_RST {
 			a.finalizeClose("Terminal ACK wait timeout")
 			return true
-		}
-
-		if waitingFor == Enums.PACKET_STREAM_FIN && a.finSeqSent != nil {
-			a.mu.Lock()
-			if a.waitingAck && a.waitingAckFor == Enums.PACKET_STREAM_FIN {
-				a.ackWaitDeadline = now.Add(a.terminalAckWait)
-			}
-			a.mu.Unlock()
 		}
 
 		return false
