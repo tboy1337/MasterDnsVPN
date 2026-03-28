@@ -39,6 +39,8 @@ func (s *Server) dispatchPostSessionPacket(vpnPacket VpnProto.Packet, sessionRec
 		return true
 	case Enums.PACKET_STREAM_DATA, Enums.PACKET_STREAM_RESEND:
 		return s.handleStreamDataRequest(vpnPacket)
+	case Enums.PACKET_STREAM_DATA_NACK:
+		return s.handleStreamDataNackRequest(vpnPacket)
 	case Enums.PACKET_DNS_QUERY_REQ:
 		return s.handleDNSQueryRequest(vpnPacket, sessionRecord)
 	case Enums.PACKET_STREAM_SYN:
@@ -64,7 +66,7 @@ func (s *Server) enqueueMissingStreamReset(record *sessionRecord, vpnPacket VpnP
 		return false
 	}
 
-	if vpnPacket.PacketType == Enums.PACKET_STREAM_DATA_ACK {
+	if vpnPacket.PacketType == Enums.PACKET_STREAM_DATA_ACK || vpnPacket.PacketType == Enums.PACKET_STREAM_DATA_NACK {
 		return true
 	}
 
@@ -373,6 +375,28 @@ func (s *Server) handleStreamDataRequest(vpnPacket VpnProto.Packet) bool {
 		}
 
 		stream.ARQ.ReceiveData(vpnPacket.SequenceNum, vpnPacket.Payload)
+	}
+
+	if !s.dispatchDeferredSessionPacket(vpnPacket, run) {
+		run()
+	}
+
+	return true
+}
+
+func (s *Server) handleStreamDataNackRequest(vpnPacket VpnProto.Packet) bool {
+	run := func() {
+		record, ok := s.sessions.Get(vpnPacket.SessionID)
+		if !ok {
+			return
+		}
+
+		stream, exists := record.getStream(vpnPacket.StreamID)
+		if !exists || stream == nil || stream.ARQ == nil {
+			return
+		}
+
+		stream.ARQ.HandleDataNack(vpnPacket.SequenceNum)
 	}
 
 	if !s.dispatchDeferredSessionPacket(vpnPacket, run) {

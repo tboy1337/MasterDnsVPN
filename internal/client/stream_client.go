@@ -145,6 +145,8 @@ func (c *Client) new_stream(streamID uint16, conn net.Conn, targetPayload []byte
 		InactivityTimeout:        c.cfg.ARQInactivityTimeoutSeconds,
 		DataPacketTTL:            c.cfg.ARQDataPacketTTLSeconds,
 		MaxDataRetries:           c.cfg.ARQMaxDataRetries,
+		DataNackMaxGap:           c.cfg.ARQDataNackMaxGap,
+		DataNackRepeatSeconds:    c.cfg.ARQDataNackRepeatSeconds,
 		ControlPacketTTL:         c.cfg.ARQControlPacketTTLSeconds,
 		TerminalDrainTimeout:     c.cfg.ARQTerminalDrainTimeoutSec,
 		TerminalAckWaitTimeout:   c.cfg.ARQTerminalAckWaitTimeoutSec,
@@ -284,6 +286,26 @@ func (s *Stream_client) RemoveQueuedData(sequenceNum uint16) bool {
 		}
 	}
 	return removedAny
+}
+
+func (s *Stream_client) RemoveQueuedDataNack(sequenceNum uint16) bool {
+	if s == nil || s.txQueue == nil {
+		return false
+	}
+
+	s.txQueueMu.Lock()
+	defer s.txQueueMu.Unlock()
+
+	key := Enums.PacketIdentityKey(s.StreamID, Enums.PACKET_STREAM_DATA_NACK, sequenceNum, 0)
+	p, ok := s.txQueue.RemoveByKey(key, func(p *clientStreamTXPacket) uint64 {
+		return Enums.PacketIdentityKey(s.StreamID, p.PacketType, p.SequenceNum, p.FragmentID)
+	})
+	if !ok {
+		return false
+	}
+
+	s.ReleaseTXPacket(p)
+	return true
 }
 
 func (s *Stream_client) cleanupResources() {
@@ -531,6 +553,8 @@ func (c *Client) InitVirtualStream0() {
 		InactivityTimeout:        999999.0, // Infinite
 		DataPacketTTL:            999999.0,
 		MaxDataRetries:           99999,
+		DataNackMaxGap:           0,
+		DataNackRepeatSeconds:    c.cfg.ARQDataNackRepeatSeconds,
 		ControlPacketTTL:         999999.0,
 		TerminalDrainTimeout:     c.cfg.ARQTerminalDrainTimeoutSec,
 		TerminalAckWaitTimeout:   c.cfg.ARQTerminalAckWaitTimeoutSec,

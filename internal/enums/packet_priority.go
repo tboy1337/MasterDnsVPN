@@ -20,6 +20,7 @@ const (
 func DefaultPacketPriority(packetType uint8) int {
 	switch packetType {
 	case PACKET_STREAM_DATA_ACK,
+		PACKET_STREAM_DATA_NACK,
 		PACKET_STREAM_SYN,
 		PACKET_STREAM_SYN_ACK,
 		PACKET_STREAM_CONNECTED,

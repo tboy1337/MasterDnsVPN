@@ -49,6 +49,10 @@ type queuedDataRemover interface {
 	RemoveQueuedData(sequenceNum uint16) bool
 }
 
+type queuedDataNackRemover interface {
+	RemoveQueuedDataNack(sequenceNum uint16) bool
+}
+
 type Logger interface {
 	Debugf(format string, args ...any)
 	Infof(format string, args ...any)
@@ -166,9 +170,14 @@ type ARQ struct {
 	controlMaxRto            time.Duration
 	controlMaxRetries        int
 	controlPacketTTL         time.Duration
+	dataNackMaxGap           int
+	dataNackRepeatInterval   time.Duration
 
 	// Virtual streams do not emit local close side effects.
 	isVirtual bool
+
+	dataNackMu       sync.Mutex
+	lastDataNackSent map[uint16]time.Time
 
 	// Concurrency
 	ctx         context.Context
@@ -244,6 +253,8 @@ type Config struct {
 	DataPacketTTL            float64
 	MaxDataRetries           int
 	ControlPacketTTL         float64
+	DataNackMaxGap           int
+	DataNackRepeatSeconds    float64
 	TerminalDrainTimeout     float64
 	TerminalAckWaitTimeout   float64
 	CompressionType          uint8
@@ -317,9 +328,12 @@ func NewARQ(streamID uint16, sessionID uint8, enqueuer PacketEnqueuer, localConn
 		enableControlReliability: cfg.EnableControlReliability,
 		controlMaxRetries:        maxI(5, cfg.ControlMaxRetries),
 		controlPacketTTL:         time.Duration(maxF(120.0, cfg.ControlPacketTTL) * float64(time.Second)),
+		dataNackMaxGap:           maxI(0, cfg.DataNackMaxGap),
+		dataNackRepeatInterval:   time.Duration(maxF(0.1, cfg.DataNackRepeatSeconds) * float64(time.Second)),
 
-		isVirtual:       cfg.IsVirtual,
-		compressionType: cfg.CompressionType,
+		isVirtual:        cfg.IsVirtual,
+		compressionType:  cfg.CompressionType,
+		lastDataNackSent: make(map[uint16]time.Time),
 	}
 
 	a.streamWorkersStarted = false
@@ -998,11 +1012,15 @@ func (a *ARQ) ReceiveData(sn uint16, data []byte) {
 	}
 	a.mu.Unlock()
 
+	a.clearSentDataNack(sn)
+
 	a.enqueuer.PushTXPacket(
 		Enums.DefaultPacketPriority(Enums.PACKET_STREAM_DATA_ACK),
 		Enums.PACKET_STREAM_DATA_ACK,
 		sn, 0, 0, 0, 0, nil,
 	)
+
+	a.maybeSendDataNacks(sn)
 
 	a.signalFlushReady()
 }
@@ -1180,6 +1198,108 @@ func (a *ARQ) ReceiveAck(packetType uint8, sn uint16) bool {
 		a.settleTerminalDrain()
 	}
 	return handled
+}
+
+func (a *ARQ) HandleDataNack(sn uint16) bool {
+	if a.isClosed() || a.IsReset() {
+		return false
+	}
+
+	now := time.Now()
+	a.mu.Lock()
+	a.lastActivity = now
+	info, exists := a.sndBuf[sn]
+	if !exists {
+		a.mu.Unlock()
+		return false
+	}
+
+	data := append([]byte(nil), info.Data...)
+	compressionType := info.CompressionType
+	ttl := info.TTL
+	a.mu.Unlock()
+
+	ok := a.enqueuer.PushTXPacket(
+		Enums.DefaultPacketPriority(Enums.PACKET_STREAM_RESEND),
+		Enums.PACKET_STREAM_RESEND,
+		sn, 0, 0, compressionType, ttl, data,
+	)
+	if !ok {
+		return false
+	}
+
+	a.mu.Lock()
+	info, exists = a.sndBuf[sn]
+	if exists {
+		info.LastSentAt = now
+		info.Retries++
+		grownRTO := time.Duration(float64(info.CurrentRTO) * 1.2)
+		info.CurrentRTO = time.Duration(minF(float64(a.maxRTO), maxF(float64(a.rto), float64(grownRTO))))
+	}
+	a.mu.Unlock()
+	return exists
+}
+
+func (a *ARQ) maybeSendDataNacks(sn uint16) {
+	if a == nil || a.dataNackMaxGap <= 0 {
+		return
+	}
+
+	a.mu.RLock()
+	rcvNxt := a.rcvNxt
+	closed := a.closed
+	a.mu.RUnlock()
+	if closed {
+		return
+	}
+
+	diff := sn - rcvNxt
+	if diff == 0 || diff >= 32768 || int(diff) > a.dataNackMaxGap {
+		return
+	}
+
+	now := time.Now()
+	minInterval := a.dataNackRepeatInterval
+	for missing := rcvNxt; missing != sn; missing++ {
+		if !a.shouldSendDataNack(missing, now, minInterval) {
+			continue
+		}
+		if !a.enqueuer.PushTXPacket(
+			Enums.DefaultPacketPriority(Enums.PACKET_STREAM_DATA_NACK),
+			Enums.PACKET_STREAM_DATA_NACK,
+			missing, 0, 0, 0, 0, nil,
+		) {
+			continue
+		}
+		a.noteDataNackSent(missing, now)
+	}
+}
+
+func (a *ARQ) shouldSendDataNack(sn uint16, now time.Time, minInterval time.Duration) bool {
+	a.dataNackMu.Lock()
+	defer a.dataNackMu.Unlock()
+
+	lastSentAt, exists := a.lastDataNackSent[sn]
+	if !exists {
+		return true
+	}
+	return now.Sub(lastSentAt) >= minInterval
+}
+
+func (a *ARQ) noteDataNackSent(sn uint16, now time.Time) {
+	a.dataNackMu.Lock()
+	a.lastDataNackSent[sn] = now
+	a.dataNackMu.Unlock()
+}
+
+func (a *ARQ) clearSentDataNack(sn uint16) {
+	a.dataNackMu.Lock()
+	delete(a.lastDataNackSent, sn)
+	a.dataNackMu.Unlock()
+
+	if remover, ok := a.enqueuer.(queuedDataNackRemover); ok {
+		remover.RemoveQueuedDataNack(sn)
+	}
 }
 
 // ---------------------------------------------------------------------

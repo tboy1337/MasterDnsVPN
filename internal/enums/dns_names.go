@@ -124,6 +124,8 @@ func PacketTypeName(packetType uint8) string {
 		return "SESSION_CLOSE"
 	case PACKET_SESSION_BUSY:
 		return "SESSION_BUSY"
+	case PACKET_STREAM_DATA_NACK:
+		return "STREAM_DATA_NACK"
 	case PACKET_ERROR_DROP:
 		return "ERROR_DROP"
 	default:

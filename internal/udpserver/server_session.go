@@ -190,6 +190,8 @@ func (s *Server) streamARQConfig(compressionType uint8) arq.Config {
 		InactivityTimeout:        s.cfg.ARQInactivityTimeoutSeconds,
 		DataPacketTTL:            s.cfg.ARQDataPacketTTLSeconds,
 		MaxDataRetries:           s.cfg.ARQMaxDataRetries,
+		DataNackMaxGap:           s.cfg.ARQDataNackMaxGap,
+		DataNackRepeatSeconds:    s.cfg.ARQDataNackRepeatSeconds,
 		ControlPacketTTL:         s.cfg.ARQControlPacketTTLSeconds,
 		TerminalDrainTimeout:     s.cfg.ARQTerminalDrainTimeoutSec,
 		TerminalAckWaitTimeout:   s.cfg.ARQTerminalAckWaitTimeoutSec,

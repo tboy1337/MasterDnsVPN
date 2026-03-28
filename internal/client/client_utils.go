@@ -292,7 +292,7 @@ func (c *Client) handleMissingStreamPacket(packet VpnProto.Packet) bool {
 	}
 
 	// No need to send Response for ACK packets
-	if packet.PacketType == Enums.PACKET_STREAM_DATA_ACK {
+	if packet.PacketType == Enums.PACKET_STREAM_DATA_ACK || packet.PacketType == Enums.PACKET_STREAM_DATA_NACK {
 		return true
 	}
 

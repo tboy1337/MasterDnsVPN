@@ -15,9 +15,11 @@ import (
 
 // MockPacketEnqueuer captures packets sent by ARQ
 type MockPacketEnqueuer struct {
-	mu          sync.Mutex
-	Packets     chan capturedPacket
-	removedSeqs []uint16
+	mu              sync.Mutex
+	Packets         chan capturedPacket
+	removedSeqs     []uint16
+	removedNackSeqs []uint16
+	queuedNackSeqs  map[uint16]struct{}
 }
 
 type RejectingPacketEnqueuer struct{}
@@ -35,11 +37,18 @@ type capturedPacket struct {
 
 func NewMockPacketEnqueuer() *MockPacketEnqueuer {
 	return &MockPacketEnqueuer{
-		Packets: make(chan capturedPacket, 1000),
+		Packets:        make(chan capturedPacket, 1000),
+		queuedNackSeqs: make(map[uint16]struct{}),
 	}
 }
 
 func (m *MockPacketEnqueuer) PushTXPacket(priority int, packetType uint8, sequenceNum uint16, fragmentID uint8, totalFragments uint8, compressionType uint8, ttl time.Duration, payload []byte) bool {
+	m.mu.Lock()
+	if packetType == Enums.PACKET_STREAM_DATA_NACK {
+		m.queuedNackSeqs[sequenceNum] = struct{}{}
+	}
+	m.mu.Unlock()
+
 	m.Packets <- capturedPacket{
 		priority:        priority,
 		packetType:      packetType,
@@ -57,6 +66,17 @@ func (m *MockPacketEnqueuer) RemoveQueuedData(sequenceNum uint16) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.removedSeqs = append(m.removedSeqs, sequenceNum)
+	return true
+}
+
+func (m *MockPacketEnqueuer) RemoveQueuedDataNack(sequenceNum uint16) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, exists := m.queuedNackSeqs[sequenceNum]; !exists {
+		return false
+	}
+	delete(m.queuedNackSeqs, sequenceNum)
+	m.removedNackSeqs = append(m.removedNackSeqs, sequenceNum)
 	return true
 }
 
@@ -453,6 +473,154 @@ func TestARQ_ReceiveAckPurgesQueuedDataCopy(t *testing.T) {
 	defer enqueuer.mu.Unlock()
 	if len(enqueuer.removedSeqs) != 1 || enqueuer.removedSeqs[0] != 7 {
 		t.Fatalf("expected queued data purge for seq 7, got %#v", enqueuer.removedSeqs)
+	}
+}
+
+func TestARQ_ReceiveDataSendsBoundedNackForNearGap(t *testing.T) {
+	enqueuer := NewMockPacketEnqueuer()
+	a := NewARQ(1, 1, enqueuer, nil, 1000, &testLogger{t}, Config{
+		WindowSize:            64,
+		RTO:                   0.2,
+		MaxRTO:                1.0,
+		DataNackMaxGap:        2,
+		DataNackRepeatSeconds: 2.0,
+	})
+
+	a.ReceiveData(1, []byte("packet 1"))
+
+	first := <-enqueuer.Packets
+	second := <-enqueuer.Packets
+	if first.packetType != Enums.PACKET_STREAM_DATA_ACK {
+		t.Fatalf("expected first packet to be DATA_ACK, got %s", Enums.PacketTypeName(first.packetType))
+	}
+	if second.packetType != Enums.PACKET_STREAM_DATA_NACK {
+		t.Fatalf("expected second packet to be DATA_NACK, got %s", Enums.PacketTypeName(second.packetType))
+	}
+	if second.sequenceNum != 0 {
+		t.Fatalf("expected DATA_NACK for missing seq 0, got %d", second.sequenceNum)
+	}
+}
+
+func TestARQ_ReceiveDataDoesNotNackFarGap(t *testing.T) {
+	enqueuer := NewMockPacketEnqueuer()
+	a := NewARQ(1, 1, enqueuer, nil, 1000, &testLogger{t}, Config{
+		WindowSize:            64,
+		RTO:                   0.2,
+		MaxRTO:                1.0,
+		DataNackMaxGap:        2,
+		DataNackRepeatSeconds: 2.0,
+	})
+
+	a.ReceiveData(3, []byte("packet 3"))
+
+	first := <-enqueuer.Packets
+	if first.packetType != Enums.PACKET_STREAM_DATA_ACK {
+		t.Fatalf("expected DATA_ACK, got %s", Enums.PacketTypeName(first.packetType))
+	}
+
+	select {
+	case extra := <-enqueuer.Packets:
+		t.Fatalf("expected no DATA_NACK for far gap, got %s", Enums.PacketTypeName(extra.packetType))
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestARQ_HandleDataNackQueuesImmediateResend(t *testing.T) {
+	enqueuer := NewMockPacketEnqueuer()
+	a := NewARQ(1, 1, enqueuer, nil, 1000, &testLogger{t}, Config{
+		WindowSize: 64,
+		RTO:        0.2,
+		MaxRTO:     1.0,
+	})
+
+	a.mu.Lock()
+	a.sndBuf[7] = &arqDataItem{
+		Data:            []byte("hello"),
+		CreatedAt:       time.Now(),
+		LastSentAt:      time.Now().Add(-time.Second),
+		CurrentRTO:      a.rto,
+		CompressionType: 3,
+	}
+	a.mu.Unlock()
+
+	if !a.HandleDataNack(7) {
+		t.Fatal("expected HandleDataNack to schedule a resend")
+	}
+
+	p := <-enqueuer.Packets
+	if p.packetType != Enums.PACKET_STREAM_RESEND {
+		t.Fatalf("expected RESEND packet, got %s", Enums.PacketTypeName(p.packetType))
+	}
+	if p.sequenceNum != 7 {
+		t.Fatalf("expected resend for seq 7, got %d", p.sequenceNum)
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	info := a.sndBuf[7]
+	if info == nil {
+		t.Fatal("expected sequence 7 to remain tracked")
+	}
+	if info.Retries != 1 {
+		t.Fatalf("expected retry count 1 after NACK resend, got %d", info.Retries)
+	}
+	if info.CurrentRTO <= a.rto {
+		t.Fatalf("expected CurrentRTO to grow after NACK resend, got %s", info.CurrentRTO)
+	}
+}
+
+func TestARQ_ReceiveDataSuppressesRepeatedNackUntilInterval(t *testing.T) {
+	enqueuer := NewMockPacketEnqueuer()
+	a := NewARQ(1, 1, enqueuer, nil, 1000, &testLogger{t}, Config{
+		WindowSize:            64,
+		RTO:                   0.2,
+		MaxRTO:                1.0,
+		DataNackMaxGap:        2,
+		DataNackRepeatSeconds: 2.0,
+	})
+
+	a.ReceiveData(1, []byte("packet 1"))
+	<-enqueuer.Packets
+	<-enqueuer.Packets
+
+	a.ReceiveData(2, []byte("packet 2"))
+	first := <-enqueuer.Packets
+	second := <-enqueuer.Packets
+	if first.packetType != Enums.PACKET_STREAM_DATA_ACK {
+		t.Fatalf("expected DATA_ACK, got %s", Enums.PacketTypeName(first.packetType))
+	}
+	if second.packetType != Enums.PACKET_STREAM_DATA_NACK || second.sequenceNum != 1 {
+		t.Fatalf("expected only a fresh NACK for seq 1, got %s seq=%d", Enums.PacketTypeName(second.packetType), second.sequenceNum)
+	}
+
+	select {
+	case extra := <-enqueuer.Packets:
+		t.Fatalf("expected no repeated NACK for seq 0 yet, got %s seq=%d", Enums.PacketTypeName(extra.packetType), extra.sequenceNum)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestARQ_ReceiveDataClearsQueuedNackWhenMissingDataArrives(t *testing.T) {
+	enqueuer := NewMockPacketEnqueuer()
+	a := NewARQ(1, 1, enqueuer, nil, 1000, &testLogger{t}, Config{
+		WindowSize:            64,
+		RTO:                   0.2,
+		MaxRTO:                1.0,
+		DataNackMaxGap:        2,
+		DataNackRepeatSeconds: 2.0,
+	})
+
+	a.ReceiveData(1, []byte("packet 1"))
+	<-enqueuer.Packets
+	<-enqueuer.Packets
+
+	a.ReceiveData(0, []byte("packet 0"))
+	<-enqueuer.Packets
+
+	enqueuer.mu.Lock()
+	defer enqueuer.mu.Unlock()
+	if len(enqueuer.removedNackSeqs) != 1 || enqueuer.removedNackSeqs[0] != 0 {
+		t.Fatalf("expected queued NACK purge for seq 0, got %#v", enqueuer.removedNackSeqs)
 	}
 }
 

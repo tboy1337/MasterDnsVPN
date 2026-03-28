@@ -146,6 +146,26 @@ func (s *Stream_server) RemoveQueuedData(sequenceNum uint16) bool {
 	return removedAny
 }
 
+func (s *Stream_server) RemoveQueuedDataNack(sequenceNum uint16) bool {
+	if s == nil || s.TXQueue == nil {
+		return false
+	}
+
+	s.txQueueMu.Lock()
+	defer s.txQueueMu.Unlock()
+
+	key := Enums.PacketIdentityKey(s.ID, Enums.PACKET_STREAM_DATA_NACK, sequenceNum, 0)
+	pkt, ok := s.TXQueue.RemoveByKey(key, func(p *serverStreamTXPacket) uint64 {
+		return Enums.PacketIdentityKey(s.ID, p.PacketType, p.SequenceNum, p.FragmentID)
+	})
+	if !ok {
+		return false
+	}
+
+	putTXPacketToPool(pkt)
+	return true
+}
+
 func (s *Stream_server) ClearTXQueue() {
 	if s == nil || s.TXQueue == nil {
 		return

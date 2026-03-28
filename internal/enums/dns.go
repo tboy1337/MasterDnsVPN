@@ -74,6 +74,9 @@ const (
 	PACKET_SESSION_CLOSE = 0x33 // 51
 	PACKET_SESSION_BUSY  = 0x34 // 52
 
+	// Data Nack
+	PACKET_STREAM_DATA_NACK = 0x35 // 53
+
 	// Generic error packets
 	PACKET_ERROR_DROP = 0xFF // 255
 )

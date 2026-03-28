@@ -24,6 +24,7 @@ func IsPackableControlPacket(packetType uint8, payloadLen int) bool {
 
 	switch packetType {
 	case Enums.PACKET_STREAM_DATA_ACK,
+		Enums.PACKET_STREAM_DATA_NACK,
 		Enums.PACKET_STREAM_SYN_ACK,
 		Enums.PACKET_STREAM_FIN_ACK,
 		Enums.PACKET_STREAM_RST_ACK,

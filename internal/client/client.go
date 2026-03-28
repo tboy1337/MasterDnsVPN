@@ -425,6 +425,14 @@ func (c *Client) HandleStreamPacket(packet VpnProto.Packet) error {
 			return nil
 		}
 		arqObj.ReceiveData(packet.SequenceNum, packet.Payload)
+	case Enums.PACKET_STREAM_DATA_NACK:
+		if arqObj.IsClosed() || !s.TerminalSince().IsZero() {
+			return nil
+		}
+
+		if arqObj.HandleDataNack(packet.SequenceNum) {
+			c.noteStreamProgress(packet.StreamID)
+		}
 	case Enums.PACKET_STREAM_CONNECTED:
 		return c.handleStreamConnected(packet, s, arqObj)
 	case Enums.PACKET_STREAM_CONNECT_FAIL:
