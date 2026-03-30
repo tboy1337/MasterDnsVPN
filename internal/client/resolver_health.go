@@ -125,8 +125,8 @@ func (c *Client) nextResolverHealthWait(now time.Time) time.Duration {
 	defer c.resolverHealthMu.Unlock()
 
 	for key, meta := range c.resolverRecheck {
-		conn := c.connectionPtrByKey(key)
-		if conn == nil || conn.IsValid || meta.NextAt.IsZero() || meta.InFlight {
+		conn, ok := c.GetConnectionByKey(key)
+		if !ok || conn.IsValid || meta.NextAt.IsZero() || meta.InFlight {
 			continue
 		}
 		dueIn := time.Until(meta.NextAt)
@@ -161,8 +161,8 @@ func (c *Client) recordResolverHealthEvent(serverKey string, success bool, now t
 	if c == nil || serverKey == "" {
 		return
 	}
-	conn := c.connectionPtrByKey(serverKey)
-	if conn == nil || !conn.IsValid {
+	conn, ok := c.GetConnectionByKey(serverKey)
+	if !ok || !conn.IsValid {
 		return
 	}
 
@@ -271,8 +271,8 @@ func (c *Client) runResolverAutoDisable(now time.Time) {
 		if state == nil {
 			continue
 		}
-		conn := c.connectionPtrByKey(key)
-		if conn == nil || !conn.IsValid {
+		conn, ok := c.GetConnectionByKey(key)
+		if !ok || !conn.IsValid {
 			continue
 		}
 		c.pruneResolverHealthLocked(state, now)
@@ -314,8 +314,8 @@ func (c *Client) disableResolverConnection(serverKey string, cause string) bool 
 	if c == nil || serverKey == "" {
 		return false
 	}
-	conn := c.connectionPtrByKey(serverKey)
-	if conn == nil || !conn.IsValid || c.balancer.ValidCount() <= 3 {
+	conn, ok := c.GetConnectionByKey(serverKey)
+	if !ok || !conn.IsValid || c.balancer.ValidCount() <= 3 {
 		return false
 	}
 	if !c.balancer.SetConnectionValidity(serverKey, false) {
@@ -347,7 +347,7 @@ func (c *Client) disableResolverConnection(serverKey string, cause string) bool 
 			cause,
 		)
 	}
-	c.appendMTURemovedServerLine(conn, cause)
+	c.appendMTURemovedServerLine(&conn, cause)
 	return true
 }
 
@@ -379,8 +379,8 @@ func (c *Client) reactivateResolverConnection(serverKey string) bool {
 	if c == nil || serverKey == "" {
 		return false
 	}
-	conn := c.connectionPtrByKey(serverKey)
-	if conn == nil || conn.IsValid {
+	conn, ok := c.GetConnectionByKey(serverKey)
+	if !ok || conn.IsValid {
 		return false
 	}
 	if !c.balancer.SetConnectionValidity(serverKey, true) {
@@ -408,7 +408,7 @@ func (c *Client) reactivateResolverConnection(serverKey string) bool {
 			conn.ResolverLabel,
 		)
 	}
-	c.appendMTUAddedServerLine(conn)
+	c.appendMTUAddedServerLine(&conn)
 	return true
 }
 
@@ -493,8 +493,12 @@ func (c *Client) runResolverRecheckBatch(ctx context.Context, now time.Time) {
 	}
 
 	for _, candidate := range candidates {
-		conn := c.connectionPtrByKey(candidate.key)
-		if conn == nil || conn.IsValid {
+		conn, ok := c.GetConnectionByKey(candidate.key)
+		if !ok || conn.IsValid {
+			continue
+		}
+		connPtr := c.connectionPtrByKey(candidate.key)
+		if connPtr == nil {
 			continue
 		}
 
@@ -520,7 +524,7 @@ func (c *Client) runResolverRecheckBatch(ctx context.Context, now time.Time) {
 			}
 
 			c.scheduleResolverRecheckFailure(cand.key, cand.runtimePriority, c.now())
-		}(candidate, conn)
+		}(candidate, connPtr)
 	}
 }
 
@@ -535,8 +539,8 @@ func (c *Client) collectDueResolverRechecks(now time.Time) []resolverRecheckCand
 	runtimeCandidates := make([]resolverRecheckCandidate, 0, len(c.runtimeDisabled))
 	normalCandidates := make([]resolverRecheckCandidate, 0, len(c.connections))
 	for key, meta := range c.resolverRecheck {
-		conn := c.connectionPtrByKey(key)
-		if conn == nil || conn.IsValid || meta.InFlight {
+		conn, ok := c.GetConnectionByKey(key)
+		if !ok || conn.IsValid || meta.InFlight {
 			continue
 		}
 		if !meta.NextAt.IsZero() && meta.NextAt.After(now) {

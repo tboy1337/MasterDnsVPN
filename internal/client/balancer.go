@@ -91,6 +91,20 @@ func (b *Balancer) ValidCount() int {
 	return len(snap.valid)
 }
 
+func (b *Balancer) GetConnectionByKey(key string) (Connection, bool) {
+	snap := b.snapshot.Load()
+	if snap == nil || key == "" {
+		return Connection{}, false
+	}
+
+	idx, ok := snap.indexByKey[key]
+	if !ok {
+		return Connection{}, false
+	}
+
+	return derefConnection(snap.connections, idx)
+}
+
 func (b *Balancer) SetConnectionValidity(key string, valid bool) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()

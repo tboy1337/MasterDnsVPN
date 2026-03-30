@@ -297,6 +297,11 @@ func (c *Client) GetConnectionByKey(key string) (Connection, bool) {
 	if c == nil || key == "" {
 		return Connection{}, false
 	}
+	if c.balancer != nil {
+		if conn, ok := c.balancer.GetConnectionByKey(key); ok {
+			return conn, true
+		}
+	}
 	idx, ok := c.connectionsByKey[key]
 	if !ok || idx < 0 || idx >= len(c.connections) {
 		return Connection{}, false

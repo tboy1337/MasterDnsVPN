@@ -163,10 +163,6 @@ func (c *Client) nextSessionInitAttempt() (Connection, []byte, [4]byte, error) {
 		}
 
 		conn := c.connections[connIdx]
-		if !conn.IsValid {
-			continue
-		}
-
 		c.sessionInitCursor = (idxInValid + 1) % validLen
 		return conn, c.sessionInitPayload, c.sessionInitVerify, nil
 	}
