@@ -54,10 +54,12 @@ DNS_REQUEST_WORKERS = 4
 
 # Maximum queued requests waiting behind request workers.
 # If the queue is full, packets are dropped and rate-limited overload logs appear.
-MAX_CONCURRENT_REQUESTS = 4096
+# With the current client sample using larger RX buffering, keeping this at 8192
+# helps the server absorb short bursts without dropping front-door requests too early.
+MAX_CONCURRENT_REQUESTS = 8192
 
 # UDP socket read/write buffer size in bytes.
-SOCKET_BUFFER_SIZE = 4194304
+SOCKET_BUFFER_SIZE = 8388608
 
 # Maximum packet buffer size allocated by the server packet pool.
 MAX_PACKET_SIZE = 65535
@@ -77,7 +79,9 @@ DROP_LOG_INTERVAL_SECONDS = 2.0
 DEFERRED_SESSION_WORKERS = 2
 
 # Queue limit for deferred per-session work.
-DEFERRED_SESSION_QUEUE_LIMIT = 2048
+# Keep this a bit higher than the client-side setup pressure so bursty SYN/SOCKS/DNS
+# setup traffic is less likely to be dropped during short spikes.
+DEFERRED_SESSION_QUEUE_LIMIT = 4096
 
 # Initial queue / store capacities.
 SESSION_ORPHAN_QUEUE_INITIAL_CAPACITY = 128
@@ -140,7 +144,7 @@ DNS_UPSTREAM_TIMEOUT = 4.0
 # Wait timeout for followers sharing an inflight DNS resolution.
 # This is used when multiple identical queries arrive while one upstream lookup
 # is already in progress.
-DNS_INFLIGHT_WAIT_TIMEOUT_SECONDS = 60.0
+DNS_INFLIGHT_WAIT_TIMEOUT_SECONDS = 15.0
 
 # Fragment assembly timeout for inbound DNS query fragments.
 DNS_FRAGMENT_ASSEMBLY_TIMEOUT = 300.0
@@ -216,6 +220,8 @@ ENCRYPTION_KEY_FILE = "encrypt_key.txt"
 # ------------------------------------------------------------------------------
 
 # Maximum packable control blocks emitted in one response.
+# Keep this aligned with the client sample unless you intentionally want larger
+# packed bursts from the server.
 MAX_PACKETS_PER_BATCH = 10
 
 # Duplicate the last packed control-block response this many dispatcher turns.
